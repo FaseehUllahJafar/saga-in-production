@@ -1,0 +1,19 @@
+<Project Sdk="Aspire.AppHost.Sdk/13.5.4">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <UserSecretsId>saga-in-production-apphost</UserSecretsId>
+    <AspireUseCliBundle>true</AspireUseCliBundle>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Aspire.Hosting.SqlServer" />
+    <PackageReference Include="Aspire.Hosting.RabbitMQ" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Orders\Orders.csproj" />
+    <ProjectReference Include="..\Payments\Payments.csproj" />
+    <ProjectReference Include="..\Inventory\Inventory.csproj" />
+    <ProjectReference Include="..\Shipping\Shipping.csproj" />
+    <ProjectReference Include="..\Notifications\Notifications.csproj" />
+    <ProjectReference Include="..\FakePay\FakePay.csproj" />
+  </ItemGroup>
+</Project>
