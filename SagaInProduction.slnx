@@ -2,9 +2,12 @@
   <Folder Name="/src/">
     <Project Path="src/Contracts/Contracts.csproj" />
     <Project Path="src/FakePay/FakePay.csproj" />
+    <Project Path="src/Inventory/Inventory.csproj" />
+    <Project Path="src/Notifications/Notifications.csproj" />
     <Project Path="src/Orders/Orders.csproj" />
     <Project Path="src/Payments/Payments.csproj" />
     <Project Path="src/ServiceDefaults/ServiceDefaults.csproj" />
+    <Project Path="src/Shipping/Shipping.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Orders.UnitTests/Orders.UnitTests.csproj" />
