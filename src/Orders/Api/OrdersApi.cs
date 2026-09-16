@@ -18,9 +18,8 @@ public static class OrdersApi
         // The first idempotency layer is the client's: a checkout button double-click or a
         // retried POST after a timeout must not start a second saga and charge twice. The
         // order id is derived from the client's Idempotency-Key, so a repeat maps onto the
-        // order that already exists. (Two identical requests arriving at the same instant
-        // both pass the existence check; the second StartCheckout then hits the saga's
-        // primary key and is dead-lettered, and the first saga carries on untouched.)
+        // order that already exists. A repeat that overtakes the first StartCheckout is
+        // absorbed by CheckoutSaga.StartOrHandle.
         app.MapPost("/orders", async (PlaceOrderRequest request, HttpContext http, OrdersDbContext db, IMessageBus bus) =>
         {
             var key = http.Request.Headers["Idempotency-Key"].ToString();

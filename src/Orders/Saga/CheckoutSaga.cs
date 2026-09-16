@@ -47,23 +47,29 @@ public sealed class CheckoutSaga : Wolverine.Saga
 
     // ---- start -------------------------------------------------------------------
 
-    public static (CheckoutSaga, OutgoingMessages) Start(StartCheckout command, SagaRuntime rt)
+    // StartOrHandle, not Start: Wolverine creates the row if it doesn't exist and hands
+    // us the existing one if it does. A client retry with the same Idempotency-Key that
+    // overtakes the first StartCheckout lands here as a harmless no-op, instead of
+    // hitting the primary key and sitting in the dead letters.
+    public OutgoingMessages StartOrHandle(StartCheckout command, SagaRuntime rt)
     {
-        var now = rt.Clock.GetUtcNow();
-        var saga = new CheckoutSaga
+        if (StartedUtc != default)
         {
-            Id = command.SagaId,
-            CustomerEmail = command.CustomerEmail,
-            CardToken = command.CardToken,
-            ShippingAddress = command.ShippingAddress,
-            Lines = command.Lines.ToList(),
-            Amount = command.Lines.Sum(l => l.UnitPrice * l.Quantity),
-            Status = SagaStatus.InProgress,
-            StartedUtc = now,
-        };
+            rt.Logger.LogInformation("Saga {SagaId}: duplicate StartCheckout ignored", command.SagaId);
+            return [];
+        }
+
+        Id = command.SagaId;
+        CustomerEmail = command.CustomerEmail;
+        CardToken = command.CardToken;
+        ShippingAddress = command.ShippingAddress;
+        Lines = command.Lines.ToList();
+        Amount = command.Lines.Sum(l => l.UnitPrice * l.Quantity);
+        Status = SagaStatus.InProgress;
+        StartedUtc = rt.Clock.GetUtcNow();
 
         rt.Metrics.Started();
-        return (saga, saga.BeginForward(StepNames.AuthorizePayment, rt));
+        return BeginForward(StepNames.AuthorizePayment, rt);
     }
 
     // ---- forward replies ---------------------------------------------------------

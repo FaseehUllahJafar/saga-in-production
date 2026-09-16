@@ -27,6 +27,19 @@ public class CheckoutSagaTests
             [StepNames.AuthorizePayment, StepNames.ReserveStock, StepNames.BookShipment, StepNames.CapturePayment]);
     }
 
+    // Production failure: a client retries POST /orders before the first StartCheckout
+    // has been handled, and the second one would start the whole checkout again.
+    [Fact]
+    public void DuplicateStart_IsIgnored()
+    {
+        _h.AdvanceTo(StepNames.ReserveStock);
+
+        var again = _h.Saga.StartOrHandle(SagaHarness.StartCommand(_h.Saga.Id), _h.Runtime);
+
+        again.ShouldBeEmpty();
+        _h.Saga.CurrentStep.ShouldBe(StepNames.ReserveStock);
+    }
+
     [Fact]
     public void EveryForwardCommand_SchedulesATimeoutForItsOwnAttempt()
     {

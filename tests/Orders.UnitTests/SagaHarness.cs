@@ -33,15 +33,12 @@ internal sealed class SagaHarness
 
     public OutgoingMessages Start(string cardToken = "tok_visa")
     {
-        var (saga, messages) = CheckoutSaga.Start(new StartCheckout(
-            Guid.CreateVersion7(),
-            "ada@example.com",
-            cardToken,
-            "1 Main St",
-            [new OrderLine(Guid.CreateVersion7(), "BOOK-DDD", 2, 30m)]), Runtime);
-        Saga = saga;
-        return messages;
+        Saga = new CheckoutSaga();
+        return Saga.StartOrHandle(StartCommand(Guid.CreateVersion7(), cardToken), Runtime);
     }
+
+    public static StartCheckout StartCommand(Guid sagaId, string cardToken = "tok_visa") =>
+        new(sagaId, "ada@example.com", cardToken, "1 Main St", [new OrderLine(Guid.CreateVersion7(), "BOOK-DDD", 2, 30m)]);
 
     public Guid Fwd(string step) => CommandId.For(Saga.Id, step, Direction.Forward);
     public Guid Comp(string step) => CommandId.For(Saga.Id, step, Direction.Compensate);
