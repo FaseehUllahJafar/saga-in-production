@@ -144,6 +144,11 @@ public sealed class CheckoutSaga : Wolverine.Saga
             InquiryResult.Succeeded => OnForwardSucceeded(m.Step, m.CommandId, m.Reference, rt, m),
             InquiryResult.Failed => OnForwardRejected(m.Step, m.CommandId, $"{m.Step} failed (found by inquiry)", rt, m),
 
+            // Past the pivot, "no trace" is not safe either: the capture may still be
+            // queued behind a backlog and land after we cancelled the shipment.
+            InquiryResult.NotFound when AwaitingInquiry && m.Step == StepNames.CapturePayment =>
+                NeedsManualReview("capture outcome unknown: inquiry found no trace, but a queued capture may still land", rt),
+
             // Nothing found. The command may still be in flight, so the journal keeps
             // the step as Unknown and it WILL be compensated. The participant's
             // tombstone then rejects the late command when it finally arrives.
@@ -216,6 +221,30 @@ public sealed class CheckoutSaga : Wolverine.Saga
             new CheckStepStatus(Id, commandId, CurrentStep).ToEndpoint(OwnerOf(CurrentStep)),
             new StepTimeout(Id, CurrentStep, AttemptCount, Direction.Forward, timings.InquiryTimeout)
         ];
+    }
+
+    // ---- replies for a saga that doesn't exist ----------------------------------
+    // Wolverine calls these instead of throwing when no saga row matches the SagaId (a
+    // reply to a command someone replayed by hand, a saga purged after retention).
+    // They are stale by definition; dead-lettering them would page someone for nothing.
+
+    public static void NotFound(PaymentAuthorized m, SagaRuntime rt) => Orphan(m, m.SagaId, rt);
+    public static void NotFound(PaymentDeclined m, SagaRuntime rt) => Orphan(m, m.SagaId, rt);
+    public static void NotFound(PaymentVoided m, SagaRuntime rt) => Orphan(m, m.SagaId, rt);
+    public static void NotFound(PaymentCaptured m, SagaRuntime rt) => Orphan(m, m.SagaId, rt);
+    public static void NotFound(CaptureFailed m, SagaRuntime rt) => Orphan(m, m.SagaId, rt);
+    public static void NotFound(StockReserved m, SagaRuntime rt) => Orphan(m, m.SagaId, rt);
+    public static void NotFound(InsufficientStock m, SagaRuntime rt) => Orphan(m, m.SagaId, rt);
+    public static void NotFound(StockReleased m, SagaRuntime rt) => Orphan(m, m.SagaId, rt);
+    public static void NotFound(ShipmentBooked m, SagaRuntime rt) => Orphan(m, m.SagaId, rt);
+    public static void NotFound(ShipmentRejected m, SagaRuntime rt) => Orphan(m, m.SagaId, rt);
+    public static void NotFound(ShipmentCancelled m, SagaRuntime rt) => Orphan(m, m.SagaId, rt);
+    public static void NotFound(StepStatusReported m, SagaRuntime rt) => Orphan(m, m.SagaId, rt);
+
+    private static void Orphan(object message, Guid sagaId, SagaRuntime rt)
+    {
+        rt.Metrics.StaleDiscarded(message.GetType().Name);
+        rt.Logger.LogWarning("Discarded {MessageType} for unknown saga {SagaId}", message.GetType().Name, sagaId);
     }
 
     // ---- transitions -------------------------------------------------------------

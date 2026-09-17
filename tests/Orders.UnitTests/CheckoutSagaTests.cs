@@ -270,6 +270,23 @@ public class CheckoutSagaTests
         _h.Saga.Journal.ShouldNotContain(e => e.Outcome == StepOutcome.Compensated);
     }
 
+    // Production failure: the capture is queued behind a Payments backlog when the
+    // inquiry runs. "No trace" today does not mean no capture tomorrow.
+    [Fact]
+    public void CaptureInquiryFindsNothing_StopsForManualReview_DoesNotCompensate()
+    {
+        _h.AdvanceTo(StepNames.CapturePayment);
+        for (var attempt = 1; attempt <= _h.Timings.ForwardAttemptTimeouts.Length; attempt++)
+        {
+            _h.Saga.Handle(_h.Timeout(StepNames.CapturePayment, attempt), _h.Runtime);
+        }
+
+        var result = _h.Saga.Handle(new StepStatusReported(_h.Saga.Id, _h.Fwd(StepNames.CapturePayment), StepNames.CapturePayment, InquiryResult.NotFound, null), _h.Runtime);
+
+        result.ShouldBeEmpty();
+        _h.Saga.Status.ShouldBe(SagaStatus.NeedsManualReview);
+    }
+
     // Production failure: the payment service is down for longer than the compensation
     // budget. A live authorization is left behind, and a human has to be told.
     [Fact]

@@ -32,6 +32,9 @@ public static class OrdersSetup
         builder.UseWolverine(opts =>
         {
             SagaMessaging.ApplyConventions(opts, "orders", sql, rabbit);
+            // Handler discovery from this assembly, not the entry assembly: under test every
+            // service runs in one process whose entry assembly is the test project.
+            opts.ApplicationAssembly = typeof(OrdersSetup).Assembly;
 
             opts.ListenToRabbitQueue(Queues.Orders);
 
