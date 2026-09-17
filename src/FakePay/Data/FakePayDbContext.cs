@@ -34,6 +34,8 @@ public sealed class IdempotencyRecord
     public string ResponseJson { get; set; } = "";
     public string? AuthorizationId { get; set; }
     public DateTimeOffset CreatedUtc { get; set; }
+    // How many retries were answered from this record instead of doing the work again.
+    public int ReplayCount { get; set; }
 }
 
 public sealed class FakePayDbContext(DbContextOptions<FakePayDbContext> options) : DbContext(options)

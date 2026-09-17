@@ -34,6 +34,9 @@ public sealed class PaymentStep
     public string? ProviderRef { get; set; }
     public string? Reason { get; set; }
     public DateTimeOffset UpdatedUtc { get; set; }
+    // When we last sent this step's request to FakePay. A "not found" is only
+    // conclusive once FakePay can no longer be processing that request.
+    public DateTimeOffset? LastProviderCallUtc { get; set; }
     public byte[] RowVersion { get; set; } = [];
 }
 

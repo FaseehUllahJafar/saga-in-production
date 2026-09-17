@@ -7,8 +7,13 @@ using ServiceDefaults;
 
 namespace FakePay;
 
-public sealed record AuthorizeRequest(decimal Amount, string CardToken);
-public sealed record CaptureRequest(decimal Amount);
+// Amounts are integer minor units (cents), as at Stripe. A decimal on the wire is not
+// one value: 25 and 25.00 are equal but serialize differently, so a retry built from a
+// reloaded saga (SQL hands back decimal(18,2)) hashed differently from the original
+// request and was refused as "key reused with a different request". The lost-response
+// integration test found that.
+public sealed record AuthorizeRequest(long AmountMinor, string CardToken);
+public sealed record CaptureRequest(long AmountMinor);
 public sealed record AuthorizationResponse(string Id, string Status, decimal Amount, string? CaptureId);
 public sealed record ErrorResponse(string Error);
 
@@ -21,7 +26,9 @@ public sealed record ErrorResponse(string Error);
 //   tok_decline        402 card_declined
 //   tok_expired_auth   authorization expires at once, so capture fails terminally
 //   tok_flaky_capture  first capture attempt returns 503, later ones succeed
-//   tok_slow           authorize commits, then answers after 20 s (past the caller's timeout)
+//   tok_slow           authorize commits, then answers late (past the caller's timeout)
+//   tok_slow_commit    authorize waits BEFORE committing, so a void can overtake it
+//   tok_capture_down   every capture answers 503 and records nothing
 public static class FakePayApi
 {
     private static readonly TimeSpan KeyLifetime = TimeSpan.FromHours(24);
@@ -29,9 +36,16 @@ public static class FakePayApi
 
     public static void MapFakePayApi(this WebApplication app)
     {
-        app.MapPost("/v1/authorizations", async (AuthorizeRequest request, HttpContext http, FakePayDbContext db, TimeProvider clock) =>
+        app.MapPost("/v1/authorizations", async (AuthorizeRequest request, HttpContext http, FakePayDbContext db, TimeProvider clock, FakePayOptions options) =>
         {
             if (!TryGetKey(http, out var key)) return MissingKey();
+
+            if (request.CardToken == "tok_slow_commit")
+            {
+                // Not cancellable on purpose: a real processor finishes the charge even
+                // after the caller hung up.
+                await Task.Delay(options.SlowResponseDelay);
+            }
 
             var result = await Idempotent(db, clock, key, "authorize", request, async () =>
             {
@@ -44,12 +58,17 @@ public static class FakePayApi
                 var authorization = new Authorization
                 {
                     Id = $"auth_{Guid.CreateVersion7():N}",
-                    Amount = request.Amount,
+                    Amount = request.AmountMinor / 100m,
                     Status = AuthorizationStatus.Authorized,
                     CreatedUtc = now,
                     ExpiresUtc = request.CardToken == "tok_expired_auth" ? now : now + AuthorizationLifetime,
                     // Remembered on the row so the flaky-capture scenario survives restarts.
-                    CaptureAttempts = request.CardToken == "tok_flaky_capture" ? -1 : 0,
+                    CaptureAttempts = request.CardToken switch
+                    {
+                        "tok_flaky_capture" => -1,
+                        "tok_capture_down" => int.MinValue,
+                        _ => 0
+                    },
                 };
                 db.Authorizations.Add(authorization);
                 return (201, ToResponse(authorization), authorization.Id);
@@ -59,7 +78,7 @@ public static class FakePayApi
             {
                 // The ledger row is already committed. The caller times out and never sees
                 // this response: the "effect happened, answer lost" case.
-                await Task.Delay(TimeSpan.FromSeconds(20));
+                await Task.Delay(options.SlowResponseDelay, http.RequestAborted).ContinueWith(_ => { });
             }
 
             return result;
@@ -71,6 +90,11 @@ public static class FakePayApi
 
             var authorization = await db.Authorizations.FindAsync(id);
             if (authorization is null) return Results.NotFound(new ErrorResponse("no_such_authorization"));
+
+            if (authorization.CaptureAttempts == int.MinValue)
+            {
+                return Results.Json(new ErrorResponse("processor_unavailable"), statusCode: 503);
+            }
 
             if (authorization.CaptureAttempts < 0)
             {
@@ -86,7 +110,7 @@ public static class FakePayApi
                     { Status: AuthorizationStatus.Voided } => (409, new ErrorResponse("authorization_voided"), id),
                     { Status: AuthorizationStatus.Captured } => (409, new ErrorResponse("already_captured"), id),
                     _ when authorization.ExpiresUtc <= clock.GetUtcNow() => (409, new ErrorResponse("authorization_expired"), id),
-                    _ when request.Amount > authorization.Amount => (422, new ErrorResponse("amount_exceeds_authorization"), id),
+                    _ when request.AmountMinor / 100m > authorization.Amount => (422, new ErrorResponse("amount_exceeds_authorization"), id),
                     _ => Capture(authorization),
                 };
                 return Task.FromResult(outcome);
@@ -106,11 +130,14 @@ public static class FakePayApi
         });
 
         // The inquiry endpoint: "what happened to the request I sent with this key?"
-        app.MapGet("/v1/lookup/{operation}/{key}", async (string operation, string key, FakePayDbContext db, TimeProvider clock) =>
+        app.MapGet("/v1/lookup/{operation}/{key}", async (string operation, string key, FakePayDbContext db) =>
         {
             var record = await db.IdempotencyKeys.AsNoTracking()
                 .FirstOrDefaultAsync(r => r.Key == key && r.Operation == operation);
-            if (record is null || record.CreatedUtc + KeyLifetime < clock.GetUtcNow())
+            // Key expiry only limits REPLAY. Looking up what happened must keep working
+            // for as long as the authorization itself can be live, or a late void would
+            // be told "never heard of it" about a hold that still exists.
+            if (record is null)
             {
                 return Results.NotFound(new ErrorResponse("no_such_request"));
             }
@@ -156,7 +183,7 @@ public static class FakePayApi
 
         if (existing is not null)
         {
-            return Replay(existing, requestHash);
+            return await Replay(db, existing, requestHash);
         }
 
         var (status, body, authorizationId) = await execute();
@@ -184,16 +211,24 @@ public static class FakePayApi
             // A concurrent request with the same key won. Answer with what it stored.
             db.ChangeTracker.Clear();
             var winner = await db.IdempotencyKeys.AsNoTracking().FirstAsync(r => r.Key == key && r.Operation == operation);
-            return Replay(winner, requestHash);
+            return await Replay(db, winner, requestHash);
         }
 
         return Results.Content(json, "application/json", Encoding.UTF8, status);
     }
 
-    private static IResult Replay(IdempotencyRecord record, string requestHash) =>
-        record.RequestHash != requestHash
-            ? Results.Conflict(new ErrorResponse("idempotency_key_reused_with_different_request"))
-            : Results.Content(record.ResponseJson, "application/json", Encoding.UTF8, record.StatusCode);
+    private static async Task<IResult> Replay(FakePayDbContext db, IdempotencyRecord record, string requestHash)
+    {
+        if (record.RequestHash != requestHash)
+        {
+            return Results.Conflict(new ErrorResponse("idempotency_key_reused_with_different_request"));
+        }
+
+        await db.IdempotencyKeys
+            .Where(r => r.Key == record.Key && r.Operation == record.Operation)
+            .ExecuteUpdateAsync(s => s.SetProperty(r => r.ReplayCount, r => r.ReplayCount + 1));
+        return Results.Content(record.ResponseJson, "application/json", Encoding.UTF8, record.StatusCode);
+    }
 
     private static bool TryGetKey(HttpContext http, out string key)
     {

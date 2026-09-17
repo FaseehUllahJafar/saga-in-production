@@ -3,6 +3,13 @@ using System.Net.Http.Json;
 
 namespace Payments;
 
+public sealed class FakePaySettings
+{
+    public TimeSpan Timeout { get; set; } = TimeSpan.FromSeconds(5);
+    // The longest FakePay may keep working on a request after we stopped waiting for it.
+    public TimeSpan SettleWindow { get; set; } = TimeSpan.FromSeconds(30);
+}
+
 public sealed record ProviderAuthorization(string Id, string Status, decimal Amount, string? CaptureId);
 
 public abstract record ProviderResult
@@ -27,16 +34,20 @@ public sealed class FakePayClient(IHttpClientFactory httpClientFactory, ILogger<
     private sealed record ErrorBody(string Error);
 
     public Task<ProviderResult> AuthorizeAsync(Guid idempotencyKey, Guid sagaId, decimal amount, string cardToken, CancellationToken ct) =>
-        Send(HttpMethod.Post, "/v1/authorizations", idempotencyKey, sagaId, new { amount, cardToken }, ct);
+        Send(HttpMethod.Post, "/v1/authorizations", idempotencyKey, sagaId, new { amountMinor = ToMinorUnits(amount), cardToken }, ct);
 
     public Task<ProviderResult> CaptureAsync(string authorizationId, Guid idempotencyKey, Guid sagaId, decimal amount, CancellationToken ct) =>
-        Send(HttpMethod.Post, $"/v1/authorizations/{authorizationId}/capture", idempotencyKey, sagaId, new { amount }, ct);
+        Send(HttpMethod.Post, $"/v1/authorizations/{authorizationId}/capture", idempotencyKey, sagaId, new { amountMinor = ToMinorUnits(amount) }, ct);
 
     public Task<ProviderResult> VoidAsync(string authorizationId, Guid sagaId, CancellationToken ct) =>
         Send(HttpMethod.Post, $"/v1/authorizations/{authorizationId}/void", null, sagaId, null, ct);
 
     public Task<ProviderResult> LookupAsync(string operation, Guid idempotencyKey, Guid sagaId, CancellationToken ct) =>
         Send(HttpMethod.Get, $"/v1/lookup/{operation}/{idempotencyKey:D}", null, sagaId, null, ct);
+
+    // One canonical wire value per amount, whatever scale the decimal happens to carry.
+    private static long ToMinorUnits(decimal amount) =>
+        decimal.ToInt64(decimal.Round(amount * 100m, 0, MidpointRounding.AwayFromZero));
 
     private async Task<ProviderResult> Send(HttpMethod method, string path, Guid? idempotencyKey, Guid sagaId, object? body, CancellationToken ct)
     {

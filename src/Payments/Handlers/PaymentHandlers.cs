@@ -24,13 +24,26 @@ public static class AuthorizePaymentHandler
             case PaymentStepStatus.Cancelled or PaymentStepStatus.Voiding or PaymentStepStatus.Voided:
                 // The tombstone. The void got here first, so this late authorize must not
                 // create an authorization nobody will ever release. No reply: the saga
-                // has moved on and would discard it anyway.
+                // has moved on and would discard it anyway. We still check FakePay by key,
+                // because an EARLIER attempt of this command may have landed before we
+                // lost track of it, and after a cancel nobody else will come back for it.
                 logger.LogWarning("Saga {SagaId}: authorize arrived after its void; rejected by tombstone", cmd.SagaId);
+                // Nothing to look for if we never called FakePay for this step, or the
+                // void already released what landed. Skipping keeps a FakePay outage
+                // from turning harmless duplicates into dead letters.
+                if (step.LastProviderCallUtc is not null && step.Status != PaymentStepStatus.Voided)
+                {
+                    await ReleaseAnythingThatLanded(cmd, fakePay, logger, ct);
+                }
                 return [];
         }
 
         // Pending: first attempt, or a retry after we lost track of an earlier one. The
         // CommandId is the idempotency key, so FakePay replays rather than double-charging.
+        // The call time is committed first: a void racing us needs it to know whether
+        // FakePay could still be working on our request.
+        step.LastProviderCallUtc = clock.GetUtcNow();
+        await db.SaveChangesAsync(ct);
         var result = await fakePay.AuthorizeAsync(cmd.CommandId, cmd.SagaId, cmd.Amount, cmd.CardToken, ct);
         switch (result)
         {
@@ -60,13 +73,11 @@ public static class AuthorizePaymentHandler
             // first (same idempotency key, so the SAME authorization), not a void.
             db.ChangeTracker.Clear();
             var winner = (await db.Steps.FindAsync([cmd.SagaId, StepNames.AuthorizePayment], ct))!;
-            if (winner.Status is PaymentStepStatus.Cancelled or PaymentStepStatus.Voiding or PaymentStepStatus.Voided
-                && result is ProviderResult.Ok landed)
+            if (winner.Status is PaymentStepStatus.Cancelled or PaymentStepStatus.Voiding or PaymentStepStatus.Voided)
             {
-                // A void tombstoned the row mid-call. The provider may now hold an
-                // authorization the saga has already written off: release it here.
-                logger.LogWarning("Saga {SagaId}: authorization {AuthorizationId} landed after cancel; voiding it", cmd.SagaId, landed.Authorization.Id);
-                await fakePay.VoidAsync(landed.Authorization.Id, cmd.SagaId, ct);
+                // A void tombstoned the row mid-call. The provider now holds an
+                // authorization the saga has already written off: release it.
+                await ReleaseAnythingThatLanded(cmd, fakePay, logger, ct);
             }
             return [];
         }
@@ -75,12 +86,31 @@ public static class AuthorizePaymentHandler
             ? [new PaymentAuthorized(cmd.SagaId, cmd.CommandId, step.ProviderRef!)]
             : [new PaymentDeclined(cmd.SagaId, cmd.CommandId, step.Reason!)];
     }
+
+    // Throws when FakePay can't be reached, so the transport retries this message: a
+    // leaked authorization must never depend on a single HTTP call succeeding.
+    private static async Task ReleaseAnythingThatLanded(AuthorizePayment cmd, FakePayClient fakePay, ILogger logger, CancellationToken ct)
+    {
+        var lookup = await fakePay.LookupAsync("authorize", cmd.CommandId, cmd.SagaId, ct);
+        switch (lookup)
+        {
+            case ProviderResult.Ok { Authorization.Status: "authorized" } landed:
+                logger.LogWarning("Saga {SagaId}: authorization {AuthorizationId} landed after cancel; voiding it", cmd.SagaId, landed.Authorization.Id);
+                if (await fakePay.VoidAsync(landed.Authorization.Id, cmd.SagaId, ct) is ProviderResult.Unavailable voidFailed)
+                {
+                    throw new DependencyUnavailableException($"FakePay void of {landed.Authorization.Id} failed: {voidFailed.Reason}");
+                }
+                break;
+            case ProviderResult.Unavailable unavailable:
+                throw new DependencyUnavailableException($"FakePay lookup failed: {unavailable.Reason}");
+        }
+    }
 }
 
 public static class VoidPaymentHandler
 {
     public static async Task<OutgoingMessages> Handle(
-        VoidPayment cmd, PaymentsDbContext db, FakePayClient fakePay, TimeProvider clock, ILogger<VoidPayment> logger, CancellationToken ct)
+        VoidPayment cmd, PaymentsDbContext db, FakePayClient fakePay, TimeProvider clock, FakePaySettings settings, ILogger<VoidPayment> logger, CancellationToken ct)
     {
         var step = await db.Steps.FindAsync([cmd.SagaId, StepNames.AuthorizePayment], ct);
 
@@ -102,7 +132,7 @@ public static class VoidPaymentHandler
             case PaymentStepStatus.Declined or PaymentStepStatus.Cancelled:
                 return [new PaymentVoided(cmd.SagaId, cmd.CommandId, WasNoOp: true)];
             case PaymentStepStatus.Pending or PaymentStepStatus.Voiding:
-                return await VoidUnknown(cmd, step, db, fakePay, clock, logger, ct);
+                return await VoidUnknown(cmd, step, db, fakePay, clock, settings, logger, ct);
             default:
                 return await VoidAuthorized(cmd, step, step.ProviderRef!, db, fakePay, clock, logger, ct);
         }
@@ -113,7 +143,7 @@ public static class VoidPaymentHandler
     // the answer. If FakePay doesn't answer, the row stays Voiding and we say nothing:
     // the saga's compensation timeout re-sends the void and we ask again.
     private static async Task<OutgoingMessages> VoidUnknown(
-        VoidPayment cmd, PaymentStep step, PaymentsDbContext db, FakePayClient fakePay, TimeProvider clock, ILogger logger, CancellationToken ct)
+        VoidPayment cmd, PaymentStep step, PaymentsDbContext db, FakePayClient fakePay, TimeProvider clock, FakePaySettings settings, ILogger logger, CancellationToken ct)
     {
         if (step.Status == PaymentStepStatus.Pending)
         {
@@ -130,7 +160,25 @@ public static class VoidPaymentHandler
             case ProviderResult.Ok { Authorization.Status: "authorized" } found:
                 logger.LogWarning("Saga {SagaId}: authorize timed out but the charge landed ({AuthorizationId}); voiding it", cmd.SagaId, found.Authorization.Id);
                 return await VoidAuthorized(cmd, step, found.Authorization.Id, db, fakePay, clock, logger, ct);
-            case ProviderResult.Ok or ProviderResult.NotFound or ProviderResult.Rejected:
+            case ProviderResult.Ok { Authorization.Status: "voided" } alreadyVoided:
+                // Something already voided it (the in-flight authorize releasing itself).
+                // The effect existed and is gone: that is a compensation, not a no-op.
+                step.Status = PaymentStepStatus.Voided;
+                step.ProviderRef = alreadyVoided.Authorization.Id;
+                step.UpdatedUtc = clock.GetUtcNow();
+                return [new PaymentVoided(cmd.SagaId, cmd.CommandId, WasNoOp: false)];
+            case ProviderResult.Ok { Authorization.Status: "captured" } captured:
+                // Money has moved; a void can't undo it. Say nothing, so the saga's
+                // compensation budget runs out into CompensationFailed and a human looks.
+                logger.LogError("Saga {SagaId}: cannot void {AuthorizationId}, it was captured", cmd.SagaId, captured.Authorization.Id);
+                return [];
+            case ProviderResult.NotFound when step.LastProviderCallUtc + settings.SettleWindow > clock.GetUtcNow():
+                // FakePay has no record YET, but our authorize went out recently and may
+                // still be inside FakePay after our client gave up waiting. Concluding
+                // "nothing to void" now would let that charge land unnoticed. Stay
+                // Voiding and ask again later.
+                throw new OutcomeNotSettledException($"authorize for saga {cmd.SagaId} may still be in flight at FakePay");
+            case ProviderResult.NotFound or ProviderResult.Rejected:
                 step.Status = PaymentStepStatus.Cancelled;
                 step.UpdatedUtc = clock.GetUtcNow();
                 return [new PaymentVoided(cmd.SagaId, cmd.CommandId, WasNoOp: true)];

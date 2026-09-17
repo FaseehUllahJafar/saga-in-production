@@ -26,9 +26,15 @@ public sealed class CarrierClient(CarrierOptions options, TimeProvider clock)
 {
     private readonly ConcurrentDictionary<Guid, string> _bookings = new();
     private readonly ConcurrentDictionary<string, bool> _cancelled = new();
+    private readonly ConcurrentDictionary<Guid, int> _bookAttempts = new();
+
+    public int BookAttempts(Guid idempotencyKey) => _bookAttempts.GetValueOrDefault(idempotencyKey);
+
+    public bool IsCancelled(string trackingNumber) => _cancelled.ContainsKey(trackingNumber);
 
     public async Task<CarrierResult> BookAsync(Guid idempotencyKey, string address, CancellationToken ct)
     {
+        _bookAttempts.AddOrUpdate(idempotencyKey, 1, (_, n) => n + 1);
         if (await Flake(ct) is { } failure) return failure;
 
         if (address.Contains("UNDELIVERABLE", StringComparison.OrdinalIgnoreCase))

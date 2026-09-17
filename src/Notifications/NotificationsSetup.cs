@@ -28,6 +28,9 @@ public static class NotificationsSetup
         builder.UseWolverine(opts =>
         {
             SagaMessaging.ApplyConventions(opts, "notifications", sql, rabbit);
+            // Handler discovery from this assembly, not the entry assembly: under test every
+            // service runs in one process whose entry assembly is the test project.
+            opts.ApplicationAssembly = typeof(NotificationsSetup).Assembly;
             opts.ListenToRabbitQueue(Queues.Notifications, q => q.BindExchange(Queues.OrderEvents));
         });
 

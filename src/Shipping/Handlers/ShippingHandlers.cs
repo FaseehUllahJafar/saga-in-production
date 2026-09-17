@@ -38,6 +38,7 @@ public static class BookShipmentHandler
                 return [new ShipmentRejected(cmd.SagaId, cmd.CommandId, shipment.Reason!)];
             case ShipmentStatus.Cancelled:
                 logger.LogWarning("Saga {SagaId}: booking arrived after its cancel; rejected by tombstone", cmd.SagaId);
+                await CancelAnythingThatLanded(cmd, carrier, logger, ct);
                 return [];
         }
 
@@ -68,10 +69,9 @@ public static class BookShipmentHandler
             // shipment (same idempotency key) and must be left alone.
             db.ChangeTracker.Clear();
             var winner = (await db.Shipments.FindAsync([cmd.SagaId], ct))!;
-            if (winner.Status == ShipmentStatus.Cancelled && result is CarrierResult.Booked late)
+            if (winner.Status == ShipmentStatus.Cancelled)
             {
-                logger.LogWarning("Saga {SagaId}: booking {TrackingNumber} landed after cancel; cancelling it", cmd.SagaId, late.TrackingNumber);
-                await carrier.CancelAsync(late.TrackingNumber, ct);
+                await CancelAnythingThatLanded(cmd, carrier, logger, ct);
             }
             return [];
         }
@@ -79,6 +79,19 @@ public static class BookShipmentHandler
         return shipment.Status == ShipmentStatus.Booked
             ? [new ShipmentBooked(cmd.SagaId, cmd.CommandId, shipment.TrackingNumber!)]
             : [new ShipmentRejected(cmd.SagaId, cmd.CommandId, shipment.Reason!)];
+    }
+
+    // Throws when the carrier can't be reached so the transport retries: once the saga
+    // has cancelled this step, nobody else will ever come back for a late booking.
+    private static async Task CancelAnythingThatLanded(BookShipment cmd, CarrierClient carrier, ILogger logger, CancellationToken ct)
+    {
+        if (carrier.FindByKey(cmd.CommandId) is not { } tracking || carrier.IsCancelled(tracking)) return;
+
+        logger.LogWarning("Saga {SagaId}: booking {TrackingNumber} landed after cancel; cancelling it", cmd.SagaId, tracking);
+        if (await carrier.CancelAsync(tracking, ct) is CarrierResult.Unavailable failed)
+        {
+            throw new DependencyUnavailableException($"carrier cancel of {tracking} failed: {failed.Reason}");
+        }
     }
 }
 

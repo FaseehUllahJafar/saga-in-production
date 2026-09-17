@@ -28,6 +28,9 @@ public static class InventorySetup
             // Eager: every handler here is pure database work, so one transaction around
             // the whole handler (stock, reservations, step row and reply) is what we want.
             SagaMessaging.ApplyConventions(opts, "inventory", sql, rabbit, TransactionMiddlewareMode.Eager);
+            // Handler discovery from this assembly, not the entry assembly: under test every
+            // service runs in one process whose entry assembly is the test project.
+            opts.ApplicationAssembly = typeof(InventorySetup).Assembly;
 
             opts.ListenToRabbitQueue(Queues.Inventory);
             opts.PublishAllMessages().ToRabbitQueue(Queues.Orders);
