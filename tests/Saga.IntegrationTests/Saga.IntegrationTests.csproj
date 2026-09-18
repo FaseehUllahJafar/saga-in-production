@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <!-- Every wait in this suite has its own deadline; threading the test token through
+         each EF call adds noise without making a hung test end any sooner. -->
+    <NoWarn>$(NoWarn);xUnit1051</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="Shouldly" />
+    <PackageReference Include="Testcontainers.MsSql" />
+    <PackageReference Include="Testcontainers.RabbitMq" />
+    <PackageReference Include="Testcontainers.Toxiproxy" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Orders\Orders.csproj" />
+    <ProjectReference Include="..\..\src\Payments\Payments.csproj" />
+    <ProjectReference Include="..\..\src\Inventory\Inventory.csproj" />
+    <ProjectReference Include="..\..\src\Shipping\Shipping.csproj" />
+    <ProjectReference Include="..\..\src\Notifications\Notifications.csproj" />
+    <ProjectReference Include="..\..\src\FakePay\FakePay.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Using Include="Xunit" />
+    <Using Include="Shouldly" />
+  </ItemGroup>
+</Project>
