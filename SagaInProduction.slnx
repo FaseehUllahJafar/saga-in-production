@@ -12,6 +12,7 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Orders.UnitTests/Orders.UnitTests.csproj" />
+    <Project Path="tests/Saga.E2E/Saga.E2E.csproj" />
     <Project Path="tests/Saga.IntegrationTests/Saga.IntegrationTests.csproj" />
   </Folder>
 </Solution>
