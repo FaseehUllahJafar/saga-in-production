@@ -1,9 +1,11 @@
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using Contracts;
 using Microsoft.EntityFrameworkCore;
 using Orders.Data;
 using Orders.Saga;
+using ServiceDefaults;
 using Wolverine;
 
 namespace Orders.Api;
@@ -36,6 +38,8 @@ public static class OrdersApi
             // Keys are scoped to the customer, the way real APIs scope them to an account.
             var scopedKey = $"{request.CustomerEmail}:{key}";
             var orderId = OrderIdFor(scopedKey);
+            // The order id the client gets back is the SagaId: tag the request with it.
+            Activity.Current?.SetTag(SagaTracing.TagName, orderId.ToString("D"));
             if (await db.Sagas.AnyAsync(s => s.Id == orderId))
             {
                 return Results.Accepted($"/orders/{orderId}", new { orderId });

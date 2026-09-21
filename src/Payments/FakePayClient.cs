@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using ServiceDefaults;
 
 namespace Payments;
 
@@ -53,7 +54,7 @@ public sealed class FakePayClient(IHttpClientFactory httpClientFactory, ILogger<
     {
         using var request = new HttpRequestMessage(method, path);
         if (idempotencyKey is { } key) request.Headers.Add("Idempotency-Key", key.ToString("D"));
-        request.Headers.Add("X-Saga-Id", sagaId.ToString("D"));
+        request.Headers.Add(SagaTracing.Header, sagaId.ToString("D"));
         if (body is not null) request.Content = JsonContent.Create(body);
 
         try

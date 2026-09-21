@@ -36,6 +36,16 @@ public static class FakePayApi
 
     public static void MapFakePayApi(this WebApplication app)
     {
+        // The caller's SagaId, on FakePay's side of the call: its request span and its
+        // log lines line up with the saga that caused them.
+        app.Use(async (http, next) =>
+        {
+            using var scope = Guid.TryParse(http.Request.Headers[SagaTracing.Header], out var sagaId)
+                ? SagaTracing.Begin(app.Logger, sagaId)
+                : null;
+            await next(http);
+        });
+
         app.MapPost("/v1/authorizations", async (AuthorizeRequest request, HttpContext http, FakePayDbContext db, TimeProvider clock, FakePayOptions options) =>
         {
             if (!TryGetKey(http, out var key)) return MissingKey();

@@ -49,6 +49,8 @@ There are three layers. Each one answers a different question.
 | `ParkedSagas_CountedUntilResolved` | A saga in CompensationFailed or NeedsManualReview must stay visible until a human resolves it. |
 | `MonitorQueries_AreServedByTheFilteredIndexes_NeverTheTable` | A monitor that runs every minute on every node silently becomes a full table scan. |
 | `DeadLetteredStart_OnlyTheDeadLetterMonitorSeesIt_RunbookReplayCompletesTheSaga` | The message that starts a saga is dead-lettered after the API said 202. No saga row exists; the runbook's replay SQL recovers it. |
+| `SagaId_TagsEveryHandlerSpan_InEveryService_AndFakePaysRequests` | "What happened to order X?" needs one filter, across every service and the provider's side of each call. |
+| `SagaId_IsInScope_ForLogLinesThatDontMentionIt` | Log lines written by libraries (HttpClient, EF) inside a handler must still be findable by SagaId. |
 
 ## Known gaps
 

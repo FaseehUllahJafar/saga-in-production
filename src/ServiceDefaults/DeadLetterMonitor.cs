@@ -19,6 +19,7 @@ public sealed record DeadLetterHealth(DateTimeOffset TakenUtc, int Count, double
 public sealed class DeadLetterMonitor : BackgroundService
 {
     public const string MeterName = "Saga.DeadLetters";
+    private const int InvalidObjectName = 208;
 
     private readonly string _connectionString;
     private readonly TimeSpan _interval;
@@ -57,6 +58,11 @@ public sealed class DeadLetterMonitor : BackgroundService
             try
             {
                 await PollAsync(stoppingToken);
+            }
+            catch (SqlException e) when (e.Number == InvalidObjectName && _last is null)
+            {
+                // Wolverine creates its tables while the host starts, alongside this.
+                _logger.LogInformation("Dead-letter table not there yet; next poll in {Interval}", _interval);
             }
             catch (Exception e) when (!stoppingToken.IsCancellationRequested)
             {

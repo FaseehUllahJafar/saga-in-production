@@ -1,3 +1,4 @@
+using Contracts;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Wolverine;
@@ -40,6 +41,8 @@ public static class SagaMessaging
             // it is what the monitor measures, and the runbook replays from it.
             // See docs/adr/0003 and docs/runbook.md.
             .CustomizeDeadLetterQueueing(new DeadLetterQueue("unused", DeadLetterQueueMode.WolverineStorage));
+
+        opts.Policies.AddMiddleware(typeof(SagaIdMiddleware), chain => chain.MessageType.IsAssignableTo(typeof(ISagaMessage)));
 
         ApplyRetryOwnership(opts);
     }

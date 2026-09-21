@@ -198,6 +198,10 @@ public sealed class SagaCluster : IAsyncLifetime
             opts.Durability.HealthCheckPollingTime = TimeSpan.FromSeconds(1);
         });
 
+        builder.Logging.AddProvider(new ScopeRecorder());
+        builder.Logging.AddFilter<ScopeRecorder>(null, LogLevel.None);
+        builder.Logging.AddFilter<ScopeRecorder>("System.Net.Http.HttpClient", LogLevel.Information);
+
         if (service == Service.Orders)
         {
             // Lets the concurrency test hold a saga's commit open so two messages for the

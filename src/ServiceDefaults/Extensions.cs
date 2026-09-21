@@ -50,7 +50,15 @@ public static class ServiceDefaultsExtensions
                     !ctx.Request.Path.StartsWithSegments("/health") &&
                     !ctx.Request.Path.StartsWithSegments("/alive") &&
                     !ctx.Request.Path.StartsWithSegments("/metrics"))
-                .AddHttpClientInstrumentation());
+                // The provider's span and ours carry the same saga.id, so the hop across
+                // the process boundary is one filter away in the dashboard.
+                .AddHttpClientInstrumentation(o => o.EnrichWithHttpRequestMessage = (activity, request) =>
+                {
+                    if (request.Headers.TryGetValues(ServiceDefaults.SagaTracing.Header, out var ids))
+                    {
+                        activity.SetTag(ServiceDefaults.SagaTracing.TagName, ids.First());
+                    }
+                }));
 
         if (!string.IsNullOrWhiteSpace(builder.Configuration["OTEL_EXPORTER_OTLP_ENDPOINT"]))
         {
