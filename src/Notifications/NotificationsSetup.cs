@@ -24,6 +24,7 @@ public static class NotificationsSetup
         builder.Services.AddSingleton<EmailSender>();
         builder.Services.AddSingleton<NotificationMetrics>();
         builder.Services.AddDbContextWithWolverineIntegration<NotificationsDbContext>(o => o.UseSqlServer(sql));
+        builder.Services.AddDeadLetterMonitor(sql);
 
         builder.UseWolverine(opts =>
         {

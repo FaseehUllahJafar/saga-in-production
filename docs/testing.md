@@ -45,6 +45,10 @@ There are three layers. Each one answers a different question.
 | `InquiryReachesInventory_AndNoStockIsLeakedEitherWay` | The inquiry reaches a non-payment participant. It can overtake a queued reserve, and either ending must leave stock exact. |
 | `PoisonMessage_LandsInDeadLettersOnce` | A malformed command. |
 | `EmailProviderDown_SagaStillCompletes_NotificationRetriedUntilSent` | A side channel is down. It must not hold the saga hostage. |
+| `SagaWithNoProgress_ReportedAsOldestAndStuck_FinishedSagasIgnored` | A saga stops moving and nothing errors (a lost timeout). Only the monitor's age gauge sees it, and the gauge drops back to 0 once it is gone. |
+| `ParkedSagas_CountedUntilResolved` | A saga in CompensationFailed or NeedsManualReview must stay visible until a human resolves it. |
+| `MonitorQueries_AreServedByTheFilteredIndexes_NeverTheTable` | A monitor that runs every minute on every node silently becomes a full table scan. |
+| `DeadLetteredStart_OnlyTheDeadLetterMonitorSeesIt_RunbookReplayCompletesTheSaga` | The message that starts a saga is dead-lettered after the API said 202. No saga row exists; the runbook's replay SQL recovers it. |
 
 ## Known gaps
 

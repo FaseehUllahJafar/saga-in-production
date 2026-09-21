@@ -21,6 +21,7 @@ public static class PaymentsSetup
 
         builder.Services.AddSingleton(TimeProvider.System);
         builder.Services.AddDbContextWithWolverineIntegration<PaymentsDbContext>(o => o.UseSqlServer(sql));
+        builder.Services.AddDeadLetterMonitor(sql);
         var fakePaySettings = new FakePaySettings
         {
             Timeout = TimeSpan.FromSeconds(builder.Configuration.GetValue("FakePay:TimeoutSeconds", 5.0)),

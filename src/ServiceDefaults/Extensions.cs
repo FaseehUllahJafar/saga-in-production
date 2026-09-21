@@ -40,6 +40,7 @@ public static class ServiceDefaultsExtensions
                 .AddHttpClientInstrumentation()
                 .AddRuntimeInstrumentation()
                 .AddMeter("Wolverine*")
+                .AddMeter(ServiceDefaults.DeadLetterMonitor.MeterName)
                 .AddMeter(extraMeters)
                 .AddPrometheusExporter())
             .WithTracing(tracing => tracing

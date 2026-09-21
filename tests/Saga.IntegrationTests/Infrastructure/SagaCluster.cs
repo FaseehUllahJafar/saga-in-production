@@ -202,7 +202,7 @@ public sealed class SagaCluster : IAsyncLifetime
         {
             // Lets the concurrency test hold a saga's commit open so two messages for the
             // same saga really overlap. Does nothing unless a test arms it.
-            builder.Services.ConfigureDbContext<OrdersDbContext>(o => o.AddInterceptors(SlowSagaCommits.Instance));
+            builder.Services.ConfigureDbContext<OrdersDbContext>(o => o.AddInterceptors(SlowSagaCommits.Instance, FailingSagaCommits.Instance));
             builder.Logging.AddProvider(SagaConflictRecorder.Instance);
             builder.Logging.AddFilter<SagaConflictRecorder>(null, LogLevel.Trace);
         }
@@ -225,6 +225,7 @@ public sealed class SagaCluster : IAsyncLifetime
     {
         await Toxiproxy.Reset();
         SlowSagaCommits.Instance.Disarm();
+        FailingSagaCommits.Instance.Disarm();
         await StopSecondOrdersNode();
         foreach (var service in Enum.GetValues<Service>())
         {

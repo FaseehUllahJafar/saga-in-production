@@ -23,6 +23,7 @@ public static class ShippingSetup
         builder.Services.AddSingleton(builder.Configuration.GetSection("Carrier").Get<CarrierOptions>() ?? new CarrierOptions());
         builder.Services.AddSingleton<CarrierClient>();
         builder.Services.AddDbContextWithWolverineIntegration<ShippingDbContext>(o => o.UseSqlServer(sql));
+        builder.Services.AddDeadLetterMonitor(sql);
 
         builder.UseWolverine(opts =>
         {

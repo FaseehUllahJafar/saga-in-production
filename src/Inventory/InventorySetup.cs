@@ -22,6 +22,7 @@ public static class InventorySetup
 
         builder.Services.AddSingleton(TimeProvider.System);
         builder.Services.AddDbContextWithWolverineIntegration<InventoryDbContext>(o => o.UseSqlServer(sql));
+        builder.Services.AddDeadLetterMonitor(sql);
 
         builder.UseWolverine(opts =>
         {

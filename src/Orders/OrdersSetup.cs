@@ -28,6 +28,10 @@ public static class OrdersSetup
         builder.Services.AddSingleton<SagaMetrics>();
         builder.Services.AddSingleton<SagaRuntime>();
         builder.Services.AddDbContextWithWolverineIntegration<OrdersDbContext>(o => o.UseSqlServer(sql));
+        builder.Services.AddDeadLetterMonitor(sql);
+        builder.Services.AddSingleton(builder.Configuration.GetSection("Saga:Monitor").Get<SagaMonitorOptions>() ?? new SagaMonitorOptions());
+        builder.Services.AddSingleton<SagaMonitor>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<SagaMonitor>());
 
         builder.UseWolverine(opts =>
         {

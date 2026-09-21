@@ -34,6 +34,18 @@ public sealed class OrdersDbContext(DbContextOptions<OrdersDbContext> options) :
             // second commit fail; the retry policy re-runs it against fresh state.
             b.Property(x => x.RowVersion).IsRowVersion();
 
+            // The stuck-saga query's index (see SagaMonitor). Filtered to the in-flight
+            // statuses, so it stays as small as today's traffic while the table keeps
+            // every order ever placed. Covering, so the monitor never touches the table.
+            b.HasIndex(x => x.LastUpdatedUtc, "IX_CheckoutSagas_Active")
+                .HasFilter("[Status] IN ('InProgress', 'Compensating')")
+                .IncludeProperties(x => new { x.Status, x.CurrentStep, x.AttemptCount });
+
+            // Parked sagas waiting for a human. Rare, and the monitor counts them every
+            // minute; without this that count is a scan of the whole table.
+            b.HasIndex(x => x.Status, "IX_CheckoutSagas_NeedsAttention")
+                .HasFilter("[Status] IN ('CompensationFailed', 'NeedsManualReview')");
+
             b.OwnsMany(x => x.Journal, j =>
             {
                 j.ToJson();
