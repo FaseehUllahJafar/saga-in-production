@@ -79,6 +79,10 @@ public sealed class SagaCluster : IAsyncLifetime
             .WithUsername("guest")
             .WithPassword("guest")
             .WithPortBinding(15672, true)
+            // Queue depths in the management API are only as fresh as the stats
+            // interval (5 s by default). Quiesce reads them, so a message sitting in a
+            // queue could look like an empty queue for seconds.
+            .WithEnvironment("RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS", "-rabbit collect_statistics_interval 100")
             .Build();
         _toxiproxy = new ToxiproxyBuilder("ghcr.io/shopify/toxiproxy:2.12.0")
             .WithNetwork(_network)
@@ -251,6 +255,10 @@ public sealed class SagaCluster : IAsyncLifetime
             UNION ALL
             SELECT 'outgoing ' + message_type + ' to ' + destination FROM wolverine.wolverine_outgoing_envelopes
             """;
+        // Quiet twice in a row, further apart than the broker's stats interval: one
+        // quiet reading can be a stale queue depth, or a message between the broker's
+        // hand-off and the receiver's inbox write.
+        var quietReadings = 0;
         while (true)
         {
             var busy = new List<string>();
@@ -263,7 +271,8 @@ public sealed class SagaCluster : IAsyncLifetime
                 while (await reader.ReadAsync()) busy.Add($"{db}: {reader.GetString(0)}");
             }
             busy.AddRange(await BrokerBacklog());
-            if (busy.Count == 0) return;
+            quietReadings = busy.Count == 0 ? quietReadings + 1 : 0;
+            if (quietReadings == 2) return;
             if (DateTime.UtcNow > until) throw new TimeoutException($"cluster not quiet: {string.Join("; ", busy.Take(10))}");
             await Task.Delay(250);
         }
