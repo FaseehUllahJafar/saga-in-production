@@ -45,6 +45,7 @@ There are three layers. Each one answers a different question.
 | `InquiryReachesInventory_AndNoStockIsLeakedEitherWay` | The inquiry reaches a non-payment participant. It can overtake a queued reserve, and either ending must leave stock exact. |
 | `PoisonMessage_LandsInDeadLettersOnce` | A malformed command. |
 | `EmailProviderDown_SagaStillCompletes_NotificationRetriedUntilSent` | A side channel is down. It must not hold the saga hostage. |
+| `OrdersNodeKilled_WithCommandsInItsOutbox_SurvivorTakesThemOver_SagaCompletes` | An Orders process is killed (not stopped) with a command in its outbox and a timeout scheduled. Both still name the dead node as owner until the survivor declares it dead. Verified in reverse: with the stale-node timeout set to an hour, the saga stays frozen. |
 | `SagaWithNoProgress_ReportedAsOldestAndStuck_FinishedSagasIgnored` | A saga stops moving and nothing errors (a lost timeout). Only the monitor's age gauge sees it, and the gauge drops back to 0 once it is gone. |
 | `ParkedSagas_CountedUntilResolved` | A saga in CompensationFailed or NeedsManualReview must stay visible until a human resolves it. |
 | `MonitorQueries_AreServedByTheFilteredIndexes_NeverTheTable` | A monitor that runs every minute on every node silently becomes a full table scan. |
@@ -54,7 +55,6 @@ There are three layers. Each one answers a different question.
 
 ## Known gaps
 
-- **Graceful stop, not a kill.** The restart tests stop hosts gracefully, so Wolverine releases the node's envelopes. Recovery after a hard kill (node reassignment by the durability agent) is not exercised.
 - **Shipping's carrier stub keeps its ledger in memory**, so no test restarts Shipping mid-saga.
 
 ## How the suite was designed

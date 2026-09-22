@@ -100,6 +100,17 @@ public sealed class SagaCluster : IAsyncLifetime
 
     public IHost Host(Service service) => _hosts[service];
 
+    // Through Toxiproxy, so tests can cut the broker off.
+    private string RabbitConnectionString =>
+        $"amqp://guest:guest@{_toxiproxy.Hostname}:{_toxiproxy.GetMappedPublicPort(RabbitProxyPort)}";
+
+    // What an Orders node in its own process (OrdersProcess) needs to join this cluster.
+    public IReadOnlyDictionary<string, string> OrdersProcessEnvironment() => new Dictionary<string, string>
+    {
+        ["ConnectionStrings__messaging"] = RabbitConnectionString,
+        [$"ConnectionStrings__{OrdersSetup.DatabaseName}"] = SqlConnectionString(OrdersSetup.DatabaseName),
+    };
+
     public async ValueTask InitializeAsync()
     {
         await _network.CreateAsync();
@@ -160,7 +171,7 @@ public sealed class SagaCluster : IAsyncLifetime
         var builder = Microsoft.Extensions.Hosting.Host.CreateApplicationBuilder();
         builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
         {
-            ["ConnectionStrings:messaging"] = $"amqp://guest:guest@{_toxiproxy.Hostname}:{_toxiproxy.GetMappedPublicPort(RabbitProxyPort)}",
+            ["ConnectionStrings:messaging"] = RabbitConnectionString,
             [$"ConnectionStrings:{OrdersSetup.DatabaseName}"] = SqlConnectionString(OrdersSetup.DatabaseName),
             [$"ConnectionStrings:{PaymentsSetup.DatabaseName}"] = SqlConnectionString(PaymentsSetup.DatabaseName),
             [$"ConnectionStrings:{InventorySetup.DatabaseName}"] = SqlConnectionString(InventorySetup.DatabaseName),
@@ -200,6 +211,9 @@ public sealed class SagaCluster : IAsyncLifetime
             opts.Durability.ScheduledJobPollingTime = TimeSpan.FromMilliseconds(250);
             opts.Durability.NodeReassignmentPollingTime = TimeSpan.FromSeconds(1);
             opts.Durability.HealthCheckPollingTime = TimeSpan.FromSeconds(1);
+            // How long a silent node's heartbeat may go before the others declare it dead
+            // and take over its envelopes (the crash test). Ten 1-second heartbeats.
+            opts.Durability.StaleNodeTimeout = TimeSpan.FromSeconds(10);
         });
 
         builder.Logging.AddProvider(new ScopeRecorder());
