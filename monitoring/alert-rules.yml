@@ -106,12 +106,14 @@ groups:
       # `for` because right after Prometheus itself starts there is no heartbeat yet
       # either; without it this pages on every restart (it did, on the first run).
       - alert: MonitorAbsent
-        expr: absent_over_time(saga_monitor_last_run_timestamp{monitor="sagas"}[10m])
+        expr: |
+          absent_over_time(saga_monitor_last_run_timestamp{monitor="sagas"}[10m])
+            or absent_over_time(saga_monitor_last_run_timestamp{monitor="dead_letters"}[10m])
         for: 5m
         labels:
           severity: page
         annotations:
-          summary: "No saga monitor has reported for 10 minutes"
+          summary: "No {{ $labels.monitor }} monitor anywhere has reported for 10 minutes"
           runbook: "docs/runbook.md#monitorsilent"
 
       # A service that is up (it pushes metrics, so it has target_info) but whose

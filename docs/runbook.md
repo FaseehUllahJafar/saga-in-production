@@ -146,7 +146,7 @@ Handle as [DeadLetterUntriaged](#deadletteruntriaged), sooner.
 
 ## MonitorSilent
 
-**Fires when** a monitor's heartbeat (`saga_monitor_last_run_timestamp`, labelled `monitor="sagas"` or `"dead_letters"`) has been more than 3 minutes old for a minute. It keeps firing for an hour after a replica stops reporting entirely. `MonitorAbsent` covers "no saga monitor has reported for 10 minutes", and `MonitorNeverReported` covers a service that is up and sending metrics but whose dead-letter monitor has not reported in 10 minutes. A monitor that fails on every poll emits no heartbeat series at all, so MonitorSilent has nothing to measure. Severity: page.
+**Fires when** a monitor's heartbeat (`saga_monitor_last_run_timestamp`, labelled `monitor="sagas"` or `"dead_letters"`) has been more than 3 minutes old for a minute. It keeps firing for an hour after a replica stops reporting entirely. `MonitorAbsent` covers "no saga monitor, or no dead-letter monitor anywhere, has reported for 10 minutes", and `MonitorNeverReported` covers a service that is up and sending metrics but whose dead-letter monitor has not reported in 10 minutes. A monitor that fails on every poll emits no heartbeat series at all, so MonitorSilent has nothing to measure. Severity: page.
 
 **Means** the numbers the other alerts read are stale. A monitor that can't reach its database keeps its last values, and those may say "all quiet". Treat every saga and dead-letter alert as unknown until this clears.
 

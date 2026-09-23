@@ -203,7 +203,8 @@ public class MonitoringTests(SagaCluster cluster) : IntegrationTest(cluster)
         await Cluster.Start(Service.Inventory);
         var frozen = await WaitForSaga(sagaId, _ => true);
 
-        var orders = Cluster.Host(Service.Orders).Services.CreateScope().ServiceProvider;
+        using var scope = Cluster.Host(Service.Orders).Services.CreateScope();
+        var orders = scope.ServiceProvider;
         (await SagaOperations.Nudge(sagaId, orders.GetRequiredService<Orders.Data.OrdersDbContext>(), orders.GetRequiredService<Wolverine.IMessageBus>()))
             .ShouldBe(NudgeResult.Sent);
 
