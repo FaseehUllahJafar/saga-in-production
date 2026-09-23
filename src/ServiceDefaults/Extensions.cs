@@ -5,6 +5,7 @@ using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using OpenTelemetry;
+using OpenTelemetry.Exporter;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Trace;
 
@@ -42,7 +43,8 @@ public static class ServiceDefaultsExtensions
                 .AddMeter("Wolverine*")
                 .AddMeter(ServiceDefaults.DeadLetterMonitor.MeterName)
                 .AddMeter(extraMeters)
-                .AddPrometheusExporter())
+                .AddPrometheusExporter()
+                .AddPrometheusPush(builder.Configuration["Monitoring:PrometheusOtlpEndpoint"]))
             .WithTracing(tracing => tracing
                 .AddSource(builder.Environment.ApplicationName)
                 .AddSource("Wolverine")
@@ -64,6 +66,21 @@ public static class ServiceDefaultsExtensions
         {
             builder.Services.AddOpenTelemetry().UseOtlpExporter();
         }
+    }
+
+    // `aspire run -- --monitoring` hands every service Prometheus's OTLP receiver, and the
+    // metrics are pushed there as well as to the Aspire dashboard. Its own reader, not a
+    // second AddOtlpExporter: the OTel SDK refuses to combine that with UseOtlpExporter.
+    private static MeterProviderBuilder AddPrometheusPush(this MeterProviderBuilder metrics, string? endpoint)
+    {
+        if (string.IsNullOrWhiteSpace(endpoint)) return metrics;
+
+        var exporter = new OtlpMetricExporter(new OtlpExporterOptions
+        {
+            Endpoint = new Uri(endpoint),
+            Protocol = OtlpExportProtocol.HttpProtobuf,
+        });
+        return metrics.AddReader(new PeriodicExportingMetricReader(exporter, exportIntervalMilliseconds: 15_000));
     }
 
     public static WebApplication MapDefaultEndpoints(this WebApplication app)

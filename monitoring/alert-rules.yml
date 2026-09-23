@@ -1,0 +1,130 @@
+# Every alert names its runbook section. Severity "page" means a customer's order or
+# money is affected now; "ticket" means someone should look today.
+#
+# Two kinds of series, two aggregations:
+#   - The monitors' gauges (saga_*, dead_letter*) come from a query every replica runs
+#     against the same database, so every replica reports the same number: max().
+#   - The counters (saga_started_total, ...) count what each replica itself handled,
+#     so the fleet's total is sum().
+
+groups:
+  - name: saga-recording
+    rules:
+      # Share of sagas that turned back, now and over the day before. Compared as a
+      # ratio so a traffic spike alone doesn't look like a failure spike. The baseline
+      # is a rolling day, not "the same 15 minutes yesterday" (too few sagas to mean
+      # anything). Trade-off: an incident lasting many hours slowly becomes its own
+      # baseline, and the alert can go quiet before the rate recovers.
+      - record: saga:compensation_ratio:15m
+        expr: sum(increase(saga_compensations_total[15m])) / clamp_min(sum(increase(saga_started_total[15m])), 1)
+      - record: saga:compensation_ratio:1d_baseline
+        expr: sum(increase(saga_compensations_total[1d] offset 15m)) / clamp_min(sum(increase(saga_started_total[1d] offset 15m)), 1)
+
+  - name: saga
+    rules:
+      # The headline. A saga that stops moving raises no error; only its age shows it.
+      # 15 minutes is well past the longest single wait in the saga (an 8 minute
+      # compensation attempt). `for` covers one missed monitor poll.
+      - alert: SagaStuck
+        expr: max(saga_oldest_active_age_seconds) > 900
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: "A saga has made no progress for {{ $value | humanizeDuration }}"
+          runbook: "docs/runbook.md#sagastuck"
+
+      # Parked sagas: the saga has done all it safely can and a human owes it a
+      # decision. Fires until the row is resolved, not just once.
+      - alert: SagaNeedsAttention
+        expr: max by (status) (saga_needs_attention) > 0
+        for: 1m
+        labels:
+          severity: page
+        annotations:
+          summary: "{{ $value }} saga(s) parked in {{ $labels.status }}"
+          runbook: "docs/runbook.md#saganeedsattention"
+
+      # More sagas turning back than usual. Needs some volume before it means
+      # anything; with no history yet, "usual" is taken as 10%.
+      - alert: SagaCompensationRateHigh
+        expr: |
+          saga:compensation_ratio:15m > clamp_min(3 * (saga:compensation_ratio:1d_baseline or vector(0)), 0.10)
+          and on() sum(increase(saga_started_total[15m])) >= 20
+        for: 5m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "{{ $value | humanizePercentage }} of sagas compensated in the last 15 minutes, over 3x the daily baseline"
+          runbook: "docs/runbook.md#sagacompensationratehigh"
+
+  - name: dead-letters
+    rules:
+      # A dead letter nobody has dealt with for 10 minutes. It stays until a human
+      # replays or deletes it, so this fires until someone does, and clears when they
+      # have. Measured as "present for 10 minutes" rather than on the age gauge: a
+      # message published without Wolverine's headers has no send time, so no age,
+      # and it must not be invisible. The age gauge is for the dashboard.
+      - alert: DeadLetterUntriaged
+        expr: max by (job) (dead_letters) > 0
+        for: 10m
+        labels:
+          severity: page
+        annotations:
+          summary: "{{ $labels.job }} has had {{ $value }} dead letter(s) waiting for over 10 minutes"
+          runbook: "docs/runbook.md#deadletteruntriaged"
+
+      # New dead letters right now: more parked than five minutes ago. Not Wolverine's
+      # own counter (wolverine_dead_letter_queue_Messages_total): that series is born at
+      # its first dead letter with the value 1, and increase() has no earlier sample to
+      # compare with, so a service's FIRST dead letter would never fire this. The
+      # monitor's gauge exists from startup at 0. In the first five minutes after a
+      # restart there is no earlier sample; compare with 0 then.
+      - alert: DeadLettersArriving
+        expr: |
+          max by (job) (dead_letters)
+            > (max by (job) (dead_letters offset 5m) or max by (job) (dead_letters) * 0)
+        labels:
+          severity: ticket
+        annotations:
+          summary: "{{ $labels.job }} has dead-lettered messages in the last 5 minutes ({{ $value }} parked now)"
+          runbook: "docs/runbook.md#deadlettersarriving"
+
+  - name: monitors
+    rules:
+      # A silent monitor must not look like a healthy system. max_over_time keeps the
+      # last heartbeat visible for an hour after a replica stops pushing entirely.
+      - alert: MonitorSilent
+        expr: time() - max by (job, monitor) (max_over_time(saga_monitor_last_run_timestamp[1h])) > 180
+        for: 1m
+        labels:
+          severity: page
+        annotations:
+          summary: "{{ $labels.job }}'s {{ $labels.monitor }} monitor last reported {{ $value | humanizeDuration }} ago"
+          runbook: "docs/runbook.md#monitorsilent"
+
+      # `for` because right after Prometheus itself starts there is no heartbeat yet
+      # either; without it this pages on every restart (it did, on the first run).
+      - alert: MonitorAbsent
+        expr: absent_over_time(saga_monitor_last_run_timestamp{monitor="sagas"}[10m])
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "No saga monitor has reported for 10 minutes"
+          runbook: "docs/runbook.md#monitorsilent"
+
+      # A service that is up (it pushes metrics, so it has target_info) but whose
+      # dead-letter monitor has not reported. A monitor that fails every poll never
+      # emits a heartbeat series, so MonitorSilent has nothing to compare, and the
+      # dead-letter alerts for that service are blind without saying so.
+      - alert: MonitorNeverReported
+        expr: |
+          max by (job) (target_info{job=~"orders|payments|inventory|shipping|notifications"})
+            unless on(job) max by (job) (max_over_time(saga_monitor_last_run_timestamp{monitor="dead_letters"}[10m]))
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "{{ $labels.job }} is up, but its dead-letter monitor has not reported for 10 minutes"
+          runbook: "docs/runbook.md#monitorsilent"

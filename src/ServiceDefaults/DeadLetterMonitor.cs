@@ -75,13 +75,16 @@ public sealed class DeadLetterMonitor : BackgroundService
     // Wolverine's table records when a message was first sent, not when it was parked.
     // For most dead letters those are seconds apart. For one that spent its scheduled
     // retries first (up to ~13 minutes for DependencyUnavailableException) the age runs
-    // ahead of the parking time, so the alert fires sooner. For a message nobody has
-    // processed, measuring from when it was sent is the honest number anyway.
+    // ahead of the parking time. For a message nobody has processed, measuring from when
+    // it was sent is the honest number anyway.
+    // A message that arrived without Wolverine's headers (published by hand from the
+    // RabbitMQ UI, or by a foreign producer) is stored with sent_at = 0001-01-01. It
+    // counts, but it has no age; the alert is on the count for that reason.
     public async Task<DeadLetterHealth> PollAsync(CancellationToken ct = default)
     {
         await using var conn = new SqlConnection(_connectionString);
         await conn.OpenAsync(ct);
-        await using var cmd = new SqlCommand("SELECT COUNT(*), MIN(sent_at) FROM wolverine.wolverine_dead_letters", conn);
+        await using var cmd = new SqlCommand("SELECT COUNT(*), MIN(CASE WHEN sent_at > '2000-01-01' THEN sent_at END) FROM wolverine.wolverine_dead_letters", conn);
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         await reader.ReadAsync(ct);
 

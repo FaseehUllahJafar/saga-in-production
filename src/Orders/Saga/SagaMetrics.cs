@@ -1,3 +1,4 @@
+using Contracts;
 using System.Diagnostics.Metrics;
 
 namespace Orders.Saga;
@@ -22,6 +23,20 @@ public sealed class SagaMetrics
         _compensationFailed = meter.CreateCounter<long>("saga_compensation_failed");
         _staleDiscarded = meter.CreateCounter<long>("saga_stale_messages_discarded");
         _manualReview = meter.CreateCounter<long>("saga_manual_review");
+
+        // Every series starts life at 0. A counter series that is first exported at 22
+        // (22 declines inside one export interval) gives increase() and rate() no earlier
+        // sample to measure from, and the alert rules would see nothing happen. Found on
+        // the first live run: 22 of 28 sagas compensated read as 18%.
+        _started.Add(0);
+        _completed.Add(0);
+        foreach (var step in StepNames.All)
+        {
+            var tag = new KeyValuePair<string, object?>("step", step);
+            _compensations.Add(0, tag);
+            _compensationFailed.Add(0, tag);
+            _manualReview.Add(0, tag);
+        }
     }
 
     public void Started() => _started.Add(1);

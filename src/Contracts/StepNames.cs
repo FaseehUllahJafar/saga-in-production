@@ -9,6 +9,8 @@ public static class StepNames
     public const string ReserveStock = "reserve-stock";
     public const string BookShipment = "book-shipment";
     public const string CapturePayment = "capture-payment";
+
+    public static readonly IReadOnlyList<string> All = [AuthorizePayment, ReserveStock, BookShipment, CapturePayment];
 }
 
 public enum Direction

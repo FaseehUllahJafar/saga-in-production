@@ -1,0 +1,37 @@
+# Started by the AppHost with `aspire run -- --monitoring`.
+#
+# The .NET services PUSH their metrics here over OTLP (Prometheus's OTLP receiver),
+# rather than being scraped. Every replica reports on its own, labelled with its
+# service.name (job) and service.instance.id (instance), and nothing here has to know
+# which ports Aspire picked. The alert rules then take max() across replicas.
+# RabbitMQ is the one thing scraped, through its Prometheus plugin.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+otlp:
+  # Keep the resource attributes as labels as well as on target_info.
+  keep_identifying_resource_attributes: true
+
+storage:
+  tsdb:
+    # Pushed samples from several processes don't arrive in timestamp order.
+    out_of_order_time_window: 30m
+
+rule_files:
+  - /etc/prometheus/alert-rules.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  - job_name: rabbitmq
+    # Per-queue depths (the plain /metrics endpoint aggregates across queues).
+    metrics_path: /metrics/detailed
+    params:
+      family: [queue_coarse_metrics]
+    static_configs:
+      - targets: ["messaging:15692"]

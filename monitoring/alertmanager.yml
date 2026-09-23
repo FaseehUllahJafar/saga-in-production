@@ -1,0 +1,17 @@
+# Every alert goes to one local webhook, whose container just logs the request body
+# (see alert-log in the Aspire dashboard's console logs). In a real team the routes would
+# split by severity: "page" to the on-call rotation, "ticket" to the owning team's queue.
+# docs/runbook.md names who would own each alert.
+
+route:
+  receiver: alert-log
+  group_by: [alertname]
+  group_wait: 10s
+  group_interval: 1m
+  repeat_interval: 1h
+
+receivers:
+  - name: alert-log
+    webhook_configs:
+      - url: http://alert-log:8080/alerts
+        send_resolved: true
