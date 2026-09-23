@@ -47,6 +47,7 @@ There are three layers. Each one answers a different question.
 | `EmailProviderDown_SagaStillCompletes_NotificationRetriedUntilSent` | A side channel is down. It must not hold the saga hostage. |
 | `OrdersNodeKilled_WithCommandsInItsOutbox_SurvivorTakesThemOver_SagaCompletes` | An Orders process is killed (not stopped) with a command in its outbox and a timeout scheduled. Both still name the dead node as owner until the survivor declares it dead. Verified in reverse: with the stale-node timeout set to an hour, the saga stays frozen. |
 | `SagaWithNoProgress_ReportedAsOldestAndStuck_FinishedSagasIgnored` | A saga stops moving and nothing errors (a lost timeout). Only the monitor's age gauge sees it, and the gauge drops back to 0 once it is gone. |
+| `FrozenSaga_TimeoutDeletedAndCommandPurged_NudgeResumesIt` | A saga's timeout is deleted and its command purged from the queue. Nothing will ever move it again; the runbook's nudge must. |
 | `ParkedSagas_CountedUntilResolved` | A saga in CompensationFailed or NeedsManualReview must stay visible until a human resolves it. |
 | `MonitorQueries_AreServedByTheFilteredIndexes_NeverTheTable` | A monitor that runs every minute on every node silently becomes a full table scan. |
 | `DeadLetteredStart_OnlyTheDeadLetterMonitorSeesIt_RunbookReplayCompletesTheSaga` | The message that starts a saga is dead-lettered after the API said 202. No saga row exists; the runbook's replay SQL recovers it. |

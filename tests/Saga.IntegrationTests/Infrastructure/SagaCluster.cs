@@ -296,17 +296,31 @@ public sealed class SagaCluster : IAsyncLifetime
     // SQL tables can't see yet, e.g. a backlog for a service that was just restarted.
     private async Task<List<string>> BrokerBacklog()
     {
-        using var http = new HttpClient
-        {
-            BaseAddress = new Uri($"http://{_rabbit.Hostname}:{_rabbit.GetMappedPublicPort(15672)}")
-        };
-        http.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(
-            "Basic", Convert.ToBase64String("guest:guest"u8.ToArray()));
+        using var http = RabbitManagement();
         var queues = await http.GetFromJsonAsync<List<QueueDepth>>("/api/queues?columns=name,messages");
         return (queues ?? []).Where(q => q.Messages > 0).Select(q => $"rabbitmq queue {q.Name}: {q.Messages}").ToList();
     }
 
     private sealed record QueueDepth(string Name, int Messages);
+
+    // What an operator does from the management UI, by accident or on purpose.
+    public async Task PurgeQueue(string queue)
+    {
+        using var http = RabbitManagement();
+        var response = await http.DeleteAsync($"/api/queues/%2F/{queue}/contents");
+        response.EnsureSuccessStatusCode();
+    }
+
+    private HttpClient RabbitManagement()
+    {
+        var http = new HttpClient
+        {
+            BaseAddress = new Uri($"http://{_rabbit.Hostname}:{_rabbit.GetMappedPublicPort(15672)}")
+        };
+        http.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(
+            "Basic", Convert.ToBase64String("guest:guest"u8.ToArray()));
+        return http;
+    }
 
     private async Task StartFakePay()
     {

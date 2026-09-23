@@ -72,6 +72,16 @@ public static class OrdersApi
                     Journal = saga.Journal.Select(j => new { j.Step, Outcome = j.Outcome.ToString(), j.Reference, j.UpdatedUtc })
                 })
                 : Results.NotFound());
+
+        // Operator endpoint for the SagaStuck runbook; see SagaOperations. In a real
+        // deployment this sits behind operator auth, not on the public API.
+        app.MapPost("/admin/sagas/{id:guid}/nudge", async (Guid id, OrdersDbContext db, IMessageBus bus) =>
+            await SagaOperations.Nudge(id, db, bus) switch
+            {
+                NudgeResult.Sent => Results.Accepted($"/orders/{id}"),
+                NudgeResult.NotInFlight => Results.Conflict(new { error = "only an InProgress or Compensating saga can be nudged" }),
+                _ => Results.NotFound()
+            });
     }
 
     private static Guid OrderIdFor(string idempotencyKey)

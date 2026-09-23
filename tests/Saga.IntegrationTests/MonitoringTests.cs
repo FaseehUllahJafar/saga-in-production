@@ -155,8 +155,8 @@ public class MonitoringTests(SagaCluster cluster) : IntegrationTest(cluster)
         (await SagaMonitor.PollAsync()).Stuck.ShouldBeEmpty();
         var deadLetters = await DeadLetterMonitor(Service.Orders).PollAsync();
         deadLetters.Count.ShouldBeGreaterThanOrEqualTo(1);
-        // Proves sent_at is populated; the age alert would be blind if it weren't.
-        deadLetters.OldestAgeSeconds.ShouldBeGreaterThan(0);
+        // A real send time: a missing one reads as 0001-01-01, two thousand years old.
+        deadLetters.OldestAgeSeconds.ShouldBeInRange(0.001, TimeSpan.FromHours(1).TotalSeconds);
 
         // The fix ships; then the runbook's replay.
         FailingSagaCommits.Instance.Disarm();
@@ -169,6 +169,53 @@ public class MonitoringTests(SagaCluster cluster) : IntegrationTest(cluster)
         (await DeadLettersFor(OrdersSetup.DatabaseName, sagaId)).ShouldBe(0);
         (await StockOf(sku)).ShouldBe(2);
         (await DeadLetterMonitor(Service.Orders).PollAsync()).Count.ShouldBe(deadLetters.Count - 1);
+    }
+
+    // Production failure: the message a saga is waiting for is gone. Here its scheduled
+    // timeout is deleted and its command purged from the participant's queue (an operator
+    // clearing a "stuck" queue in the management UI). Nothing will ever move the saga
+    // again; this is exactly what SagaStuck fires on. The runbook's nudge sends the saga
+    // its own timeout, and it carries on from where it stopped.
+    [Fact]
+    public async Task FrozenSaga_TimeoutDeletedAndCommandPurged_NudgeResumesIt()
+    {
+        var sku = await SeedSku(available: 3);
+        await Cluster.Stop(Service.Inventory);
+        var sagaId = await PlaceOrder(sku);
+        await WaitForSaga(sagaId, s => s.CurrentStep == StepNames.ReserveStock);
+
+        // Freeze it: remove the pending timeout and the queued command, then check that
+        // nothing moves for two attempt timeouts. A timeout that was already firing while
+        // we deleted re-sends and re-schedules, so repeat until it holds still.
+        await Eventually(async () =>
+        {
+            await Execute(OrdersSetup.DatabaseName,
+                "DELETE FROM wolverine.wolverine_incoming_envelopes WHERE status = 'Scheduled' AND message_type = @type AND CAST(body AS varchar(max)) LIKE @saga",
+                ("@type", "Orders.Saga.StepTimeout"), ("@saga", $"%{sagaId:D}%"));
+            await Cluster.PurgeQueue(Queues.Inventory);
+            var before = await WaitForSaga(sagaId, _ => true);
+            await Task.Delay(SagaCluster.AttemptTimeout * 2);
+            var after = await WaitForSaga(sagaId, _ => true);
+            return after.Status == SagaStatus.InProgress && after.CurrentStep == StepNames.ReserveStock
+                && after.LastUpdatedUtc == before.LastUpdatedUtc;
+        }, TimeSpan.FromSeconds(60));
+
+        await Cluster.Start(Service.Inventory);
+        var frozen = await WaitForSaga(sagaId, _ => true);
+
+        var orders = Cluster.Host(Service.Orders).Services.CreateScope().ServiceProvider;
+        (await SagaOperations.Nudge(sagaId, orders.GetRequiredService<Orders.Data.OrdersDbContext>(), orders.GetRequiredService<Wolverine.IMessageBus>()))
+            .ShouldBe(NudgeResult.Sent);
+
+        var saga = await WaitForFinished(sagaId);
+        saga.Status.ShouldBe(SagaStatus.Completed, Describe(saga));
+        saga.LastUpdatedUtc.ShouldBeGreaterThan(frozen.LastUpdatedUtc);
+        (await StockOf(sku)).ShouldBe(2);
+        (await ReservationsFor(sagaId)).ShouldBe(1);
+
+        // A finished saga can't be nudged.
+        (await SagaOperations.Nudge(sagaId, orders.GetRequiredService<Orders.Data.OrdersDbContext>(), orders.GetRequiredService<Wolverine.IMessageBus>()))
+            .ShouldBe(NudgeResult.NotInFlight);
     }
 
     // ---- helpers ---------------------------------------------------------------------
