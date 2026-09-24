@@ -141,6 +141,11 @@ public abstract class IntegrationTest(SagaCluster cluster) : IAsyncLifetime
         "SELECT COUNT(*) FROM wolverine.wolverine_incoming_envelopes WHERE message_type = @type AND status = 'Handled' AND CAST(body AS varchar(max)) LIKE @saga",
         ("@type", messageType), ("@saga", $"%{sagaId:D}%"));
 
+    // Any inbox row for the saga, whatever its status: received, scheduled or handled.
+    protected Task<int> IncomingFor(string database, Guid sagaId) => Scalar(database,
+        "SELECT COUNT(*) FROM wolverine.wolverine_incoming_envelopes WHERE CAST(body AS varchar(max)) LIKE @saga",
+        ("@saga", $"%{sagaId:D}%"));
+
     protected Task<int> DeadLettersFor(string database, Guid sagaId) => Scalar(database,
         "SELECT COUNT(*) FROM wolverine.wolverine_dead_letters WHERE CAST(body AS varchar(max)) LIKE @saga",
         ("@saga", $"%{sagaId:D}%"));

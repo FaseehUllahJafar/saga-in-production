@@ -314,6 +314,21 @@ public sealed class SagaCluster : IAsyncLifetime
         response.EnsureSuccessStatusCode();
     }
 
+    // Publishes from the management API with no AMQP properties at all: no message type,
+    // no Wolverine headers. What "Publish message" in the RabbitMQ UI does by default.
+    public async Task PublishRaw(string queue, string payload)
+    {
+        using var http = RabbitManagement();
+        var response = await http.PostAsJsonAsync("/api/exchanges/%2F/amq.default/publish",
+            new { properties = new { }, routing_key = queue, payload, payload_encoding = "string" });
+        response.EnsureSuccessStatusCode();
+        // "routed": false means no queue took it, and a test built on it would pass vacuously.
+        var result = await response.Content.ReadFromJsonAsync<PublishResult>();
+        if (result is not { Routed: true }) throw new InvalidOperationException($"nothing routed to queue {queue}");
+    }
+
+    private sealed record PublishResult(bool Routed);
+
     private HttpClient RabbitManagement()
     {
         var http = new HttpClient
