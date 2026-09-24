@@ -15,6 +15,7 @@ public sealed class Authorization
 {
     public string Id { get; set; } = "";
     public decimal Amount { get; set; }
+    public string Currency { get; set; } = "USD";
     public AuthorizationStatus Status { get; set; }
     public DateTimeOffset CreatedUtc { get; set; }
     public DateTimeOffset ExpiresUtc { get; set; }
@@ -53,6 +54,7 @@ public sealed class FakePayDbContext(DbContextOptions<FakePayDbContext> options)
             b.Property(x => x.Id).HasMaxLength(64);
             b.Property(x => x.CaptureId).HasMaxLength(64);
             b.Property(x => x.Amount).HasPrecision(18, 2);
+            b.Property(x => x.Currency).HasMaxLength(3).IsFixedLength().HasDefaultValue("USD");
             b.Property(x => x.Status).HasConversion<string>().HasMaxLength(16);
         });
 

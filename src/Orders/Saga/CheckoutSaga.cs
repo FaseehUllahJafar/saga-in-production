@@ -24,6 +24,7 @@ public sealed class CheckoutSaga : Wolverine.Saga
     public string CardToken { get; set; } = "";
     public string ShippingAddress { get; set; } = "";
     public decimal Amount { get; set; }
+    public string Currency { get; set; } = AuthorizePayment.LegacyCurrency;
     public List<OrderLine> Lines { get; set; } = [];
 
     public SagaStatus Status { get; set; }
@@ -65,6 +66,8 @@ public sealed class CheckoutSaga : Wolverine.Saga
         ShippingAddress = command.ShippingAddress;
         Lines = command.Lines.ToList();
         Amount = command.Lines.Sum(l => l.UnitPrice * l.Quantity);
+        // The record's default covers a missing field, not an explicit null.
+        Currency = command.Currency ?? AuthorizePayment.LegacyCurrency;
         Status = SagaStatus.InProgress;
         StartedUtc = rt.Clock.GetUtcNow();
 
@@ -355,7 +358,7 @@ public sealed class CheckoutSaga : Wolverine.Saga
         var commandId = CommandId.For(Id, step, Direction.Forward);
         object command = step switch
         {
-            StepNames.AuthorizePayment => new AuthorizePayment(Id, commandId, Amount, CardToken),
+            StepNames.AuthorizePayment => new AuthorizePayment(Id, commandId, Amount, CardToken, Currency),
             StepNames.ReserveStock => new ReserveStock(Id, commandId, Lines),
             StepNames.BookShipment => new BookShipment(Id, commandId, ShippingAddress, Lines.Sum(l => l.Quantity)),
             StepNames.CapturePayment => new CapturePayment(Id, commandId, Amount),
@@ -432,7 +435,7 @@ public sealed class CheckoutSaga : Wolverine.Saga
         // Notifications live outside the saga. The saga's job ends when the order is
         // paid for and booked; a failing email provider must not hold it open, let
         // alone compensate a completed order. See src/Notifications.
-        return [new OrderCompleted(Id, CustomerEmail, Amount)];
+        return [new OrderCompleted(Id, CustomerEmail, Amount, Currency)];
     }
 
     // ---- gating ------------------------------------------------------------------

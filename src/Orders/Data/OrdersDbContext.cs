@@ -28,6 +28,7 @@ public sealed class OrdersDbContext(DbContextOptions<OrdersDbContext> options) :
             b.Property(x => x.TrackingNumber).HasMaxLength(64);
             b.Property(x => x.CaptureId).HasMaxLength(64);
             b.Property(x => x.Amount).HasPrecision(18, 2);
+            b.Property(x => x.Currency).HasMaxLength(3).IsFixedLength().HasDefaultValue(Contracts.AuthorizePayment.LegacyCurrency);
 
             // Two messages for the same saga (a reply racing its own timeout) can be
             // handled at once on different threads or nodes. The rowversion makes the

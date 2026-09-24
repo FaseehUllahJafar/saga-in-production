@@ -34,8 +34,8 @@ public sealed class FakePayClient(IHttpClientFactory httpClientFactory, ILogger<
 
     private sealed record ErrorBody(string Error);
 
-    public Task<ProviderResult> AuthorizeAsync(Guid idempotencyKey, Guid sagaId, decimal amount, string cardToken, CancellationToken ct) =>
-        Send(HttpMethod.Post, "/v1/authorizations", idempotencyKey, sagaId, new { amountMinor = ToMinorUnits(amount), cardToken }, ct);
+    public Task<ProviderResult> AuthorizeAsync(Guid idempotencyKey, Guid sagaId, decimal amount, string currency, string cardToken, CancellationToken ct) =>
+        Send(HttpMethod.Post, "/v1/authorizations", idempotencyKey, sagaId, new { amountMinor = ToMinorUnits(amount), cardToken, currency }, ct);
 
     public Task<ProviderResult> CaptureAsync(string authorizationId, Guid idempotencyKey, Guid sagaId, decimal amount, CancellationToken ct) =>
         Send(HttpMethod.Post, $"/v1/authorizations/{authorizationId}/capture", idempotencyKey, sagaId, new { amountMinor = ToMinorUnits(amount) }, ct);

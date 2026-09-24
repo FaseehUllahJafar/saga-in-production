@@ -100,6 +100,9 @@ public sealed class SagaCluster : IAsyncLifetime
 
     public IHost Host(Service service) => _hosts[service];
 
+    // FakePay directly, not through the proxy: for tests that talk to the provider itself.
+    public Uri FakePayUri => new($"http://127.0.0.1:{_fakePayPort}");
+
     // Through Toxiproxy, so tests can cut the broker off.
     private string RabbitConnectionString =>
         $"amqp://guest:guest@{_toxiproxy.Hostname}:{_toxiproxy.GetMappedPublicPort(RabbitProxyPort)}";

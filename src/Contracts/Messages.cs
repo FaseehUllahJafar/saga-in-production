@@ -15,7 +15,16 @@ public interface ISagaMessage
 public sealed record OrderLine(Guid OrderLineId, string Sku, int Quantity, decimal UnitPrice);
 
 // ---- Payments ----------------------------------------------------------------------
-public sealed record AuthorizePayment(Guid SagaId, Guid CommandId, decimal Amount, string CardToken) : ISagaMessage;
+// Currency was added after the first release (docs/adr/0004). Additive, with a default
+// that says what every message without it meant: a message serialized before the field
+// existed, still sitting in a queue or an outbox at deploy time, reads as USD, which is
+// what it was. Payments (the reader) shipped this before Orders started sending
+// anything but USD: an older Payments ignores the field it doesn't know and would have
+// authorized a EUR order as dollars.
+public sealed record AuthorizePayment(Guid SagaId, Guid CommandId, decimal Amount, string CardToken, string Currency = AuthorizePayment.LegacyCurrency) : ISagaMessage
+{
+    public const string LegacyCurrency = "USD";
+}
 public sealed record PaymentAuthorized(Guid SagaId, Guid CommandId, string AuthorizationId) : ISagaMessage;
 public sealed record PaymentDeclined(Guid SagaId, Guid CommandId, string Reason) : ISagaMessage;
 
@@ -57,7 +66,8 @@ public enum InquiryResult
 
 // ---- Integration events (outside the saga) -----------------------------------------
 // The order id IS the saga id; the events keep the name their subscribers know it by.
-public sealed record OrderCompleted(Guid OrderId, string CustomerEmail, decimal Amount) : ISagaMessage
+// Currency: the same additive change as AuthorizePayment (docs/adr/0004).
+public sealed record OrderCompleted(Guid OrderId, string CustomerEmail, decimal Amount, string Currency = AuthorizePayment.LegacyCurrency) : ISagaMessage
 {
     Guid ISagaMessage.SagaId => OrderId;
 }

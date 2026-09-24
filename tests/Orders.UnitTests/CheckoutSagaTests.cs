@@ -27,6 +27,23 @@ public class CheckoutSagaTests
             [StepNames.AuthorizePayment, StepNames.ReserveStock, StepNames.BookShipment, StepNames.CapturePayment]);
     }
 
+    // ADR 0004: the order's currency travels to the authorization and to the event the
+    // confirmation email is written from.
+    [Fact]
+    public void EuroOrder_CurrencyReachesTheAuthorizeAndTheCompletedEvent()
+    {
+        var saga = new CheckoutSaga();
+        var start = SagaHarness.StartCommand(Guid.CreateVersion7()) with { Currency = "EUR" };
+
+        saga.StartOrHandle(start, _h.Runtime).Single<AuthorizePayment>().Currency.ShouldBe("EUR");
+        saga.Handle(new PaymentAuthorized(saga.Id, CommandId.For(saga.Id, StepNames.AuthorizePayment, Direction.Forward), "auth_1"), _h.Runtime);
+        saga.Handle(new StockReserved(saga.Id, CommandId.For(saga.Id, StepNames.ReserveStock, Direction.Forward)), _h.Runtime);
+        saga.Handle(new ShipmentBooked(saga.Id, CommandId.For(saga.Id, StepNames.BookShipment, Direction.Forward), "TRK1"), _h.Runtime);
+        var done = saga.Handle(new PaymentCaptured(saga.Id, CommandId.For(saga.Id, StepNames.CapturePayment, Direction.Forward), "cap_1"), _h.Runtime);
+
+        done.Single<OrderCompleted>().Currency.ShouldBe("EUR");
+    }
+
     // Production failure: a client retries POST /orders before the first StartCheckout
     // has been handled, and the second one would start the whole checkout again.
     [Fact]

@@ -10,7 +10,7 @@ using Wolverine;
 
 namespace Orders.Api;
 
-public sealed record PlaceOrderRequest(string CustomerEmail, string CardToken, string ShippingAddress, List<PlaceOrderLine> Lines);
+public sealed record PlaceOrderRequest(string CustomerEmail, string CardToken, string ShippingAddress, List<PlaceOrderLine> Lines, string? Currency = null);
 public sealed record PlaceOrderLine(string Sku, int Quantity, decimal UnitPrice);
 public sealed record CancelParkedSagaRequest(string ResolvedBy, string Note);
 
@@ -36,6 +36,12 @@ public static class OrdersApi
                 return Results.ValidationProblem(new Dictionary<string, string[]> { ["lines"] = ["at least one line with a positive quantity"] });
             }
 
+            var currency = (request.Currency ?? AuthorizePayment.LegacyCurrency).ToUpperInvariant();
+            if (currency.Length != 3 || !currency.All(char.IsAsciiLetterUpper))
+            {
+                return Results.ValidationProblem(new Dictionary<string, string[]> { ["currency"] = ["an ISO 4217 code such as USD or EUR"] });
+            }
+
             // Keys are scoped to the customer, the way real APIs scope them to an account.
             var scopedKey = $"{request.CustomerEmail}:{key}";
             var orderId = OrderIdFor(scopedKey);
@@ -52,7 +58,7 @@ public static class OrdersApi
 
             // Goes onto a durable local queue: persisted before the 202 is returned, so
             // an accepted order survives a crash before the saga has even started.
-            await bus.SendAsync(new StartCheckout(orderId, request.CustomerEmail, request.CardToken, request.ShippingAddress, lines));
+            await bus.SendAsync(new StartCheckout(orderId, request.CustomerEmail, request.CardToken, request.ShippingAddress, lines, currency));
             return Results.Accepted($"/orders/{orderId}", new { orderId });
         });
 
@@ -65,6 +71,7 @@ public static class OrdersApi
                     saga.CurrentStep,
                     saga.AttemptCount,
                     saga.Amount,
+                    saga.Currency,
                     saga.FailureReason,
                     saga.AuthorizationId,
                     saga.TrackingNumber,

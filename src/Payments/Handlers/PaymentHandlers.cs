@@ -44,7 +44,7 @@ public static class AuthorizePaymentHandler
         // FakePay could still be working on our request.
         step.LastProviderCallUtc = clock.GetUtcNow();
         await db.SaveChangesAsync(ct);
-        var result = await fakePay.AuthorizeAsync(cmd.CommandId, cmd.SagaId, cmd.Amount, cmd.CardToken, ct);
+        var result = await fakePay.AuthorizeAsync(cmd.CommandId, cmd.SagaId, cmd.Amount, cmd.Currency ?? AuthorizePayment.LegacyCurrency, cmd.CardToken, ct);
         switch (result)
         {
             case ProviderResult.Ok ok:

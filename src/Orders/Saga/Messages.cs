@@ -8,7 +8,10 @@ public sealed record StartCheckout(
     string CustomerEmail,
     string CardToken,
     string ShippingAddress,
-    IReadOnlyList<OrderLine> Lines) : ISagaMessage;
+    IReadOnlyList<OrderLine> Lines,
+    // Defaulted for the same reason as AuthorizePayment.Currency: a StartCheckout
+    // accepted before the deploy may still be in the durable local queue.
+    string Currency = AuthorizePayment.LegacyCurrency) : ISagaMessage;
 
 // The orchestrator's own timer. Unlike replies, a timeout carries (Step, Attempt,
 // Direction), and it is discarded unless all three still match the saga row. A timeout

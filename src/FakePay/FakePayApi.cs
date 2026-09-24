@@ -12,7 +12,7 @@ namespace FakePay;
 // reloaded saga (SQL hands back decimal(18,2)) hashed differently from the original
 // request and was refused as "key reused with a different request". The lost-response
 // integration test found that.
-public sealed record AuthorizeRequest(long AmountMinor, string CardToken);
+public sealed record AuthorizeRequest(long AmountMinor, string CardToken, string Currency = "USD");
 public sealed record CaptureRequest(long AmountMinor);
 public sealed record AuthorizationResponse(string Id, string Status, decimal Amount, string? CaptureId);
 public sealed record ErrorResponse(string Error);
@@ -33,6 +33,15 @@ public static class FakePayApi
 {
     private static readonly TimeSpan KeyLifetime = TimeSpan.FromHours(24);
     private static readonly TimeSpan AuthorizationLifetime = TimeSpan.FromDays(7);
+    private static readonly HashSet<string> SupportedCurrencies = ["USD", "EUR", "GBP"];
+
+    // The idempotency hash must not change for a request that means the same thing.
+    // Adding Currency changed the request's serialized form, so a retry sent after the
+    // deploy, of an authorize first sent before it, would hash differently and be refused
+    // as "key reused with a different request". A USD request therefore hashes in its
+    // original two-field shape; only another currency adds the field.
+    private static object HashShape(AuthorizeRequest request) =>
+        request.Currency == "USD" ? new { request.AmountMinor, request.CardToken } : request;
 
     public static void MapFakePayApi(this WebApplication app)
     {
@@ -49,6 +58,7 @@ public static class FakePayApi
         app.MapPost("/v1/authorizations", async (AuthorizeRequest request, HttpContext http, FakePayDbContext db, TimeProvider clock, FakePayOptions options) =>
         {
             if (!TryGetKey(http, out var key)) return MissingKey();
+            request = request with { Currency = (request.Currency ?? "USD").ToUpperInvariant() };
 
             if (request.CardToken == "tok_slow_commit")
             {
@@ -57,11 +67,16 @@ public static class FakePayApi
                 await Task.Delay(options.SlowResponseDelay);
             }
 
-            var result = await Idempotent(db, clock, key, "authorize", request, async () =>
+            var result = await Idempotent(db, clock, key, "authorize", HashShape(request), async () =>
             {
                 if (request.CardToken == "tok_decline")
                 {
                     return (402, new ErrorResponse("card_declined"), null);
+                }
+
+                if (!SupportedCurrencies.Contains(request.Currency))
+                {
+                    return (400, new ErrorResponse("unsupported_currency"), null);
                 }
 
                 var now = clock.GetUtcNow();
@@ -69,6 +84,7 @@ public static class FakePayApi
                 {
                     Id = $"auth_{Guid.CreateVersion7():N}",
                     Amount = request.AmountMinor / 100m,
+                    Currency = request.Currency,
                     Status = AuthorizationStatus.Authorized,
                     CreatedUtc = now,
                     ExpiresUtc = request.CardToken == "tok_expired_auth" ? now : now + AuthorizationLifetime,

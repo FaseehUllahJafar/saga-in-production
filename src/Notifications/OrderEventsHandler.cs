@@ -21,7 +21,7 @@ public static class OrderEventsHandler
     }
 
     public static Task Handle(OrderCompleted e, NotificationsDbContext db, EmailSender email, NotificationMetrics metrics, TimeProvider clock, CancellationToken ct) =>
-        SendOnce(e.OrderId, "completed", e.CustomerEmail, $"Order {e.OrderId} confirmed ({e.Amount:0.00})", db, email, metrics, clock, ct);
+        SendOnce(e.OrderId, "completed", e.CustomerEmail, $"Order {e.OrderId} confirmed ({e.Amount:0.00} {e.Currency})", db, email, metrics, clock, ct);
 
     public static Task Handle(OrderCancelled e, NotificationsDbContext db, EmailSender email, NotificationMetrics metrics, TimeProvider clock, CancellationToken ct) =>
         SendOnce(e.OrderId, "cancelled", e.CustomerEmail, $"Order {e.OrderId} could not be completed", db, email, metrics, clock, ct);
