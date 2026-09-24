@@ -16,6 +16,13 @@ jobs:
         with:
           global-json-file: global.json
 
+      # The same Prometheus image the monitoring profile runs, so the rule syntax and
+      # the absence-rule tests are checked by the version that evaluates them.
+      - name: Alert rules
+        run: |
+          docker run --rm -v "$PWD/monitoring:/m" -w /m --entrypoint promtool prom/prometheus:v3.13.3 check rules alert-rules.yml
+          docker run --rm -v "$PWD/monitoring:/m" -w /m --entrypoint promtool prom/prometheus:v3.13.3 test rules alert-rules.test.yml
+
       - name: Restore
         run: dotnet restore
 

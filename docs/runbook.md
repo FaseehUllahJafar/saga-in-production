@@ -158,7 +158,7 @@ Handle as [DeadLetterUntriaged](#deadletteruntriaged), sooner.
 
 **Means** the numbers the other alerts read are stale. A monitor that can't reach its database keeps its last values, and those may say "all quiet". Treat every saga and dead-letter alert as unknown until this clears.
 
-**First run:** stopping `orders` fired it for both of its monitors 3 minutes later. It had no `for:` then; with the minute added since, expect about 4. `MonitorAbsent` also paged once when Prometheus started, before any service had reported; that is why it now has `for: 5m`.
+**First run:** stopping `orders` fired it for both of its monitors 3 minutes later. It had no `for:` then; with the minute added since, expect about 4. `MonitorAbsent` also paged once when Prometheus started, before any service had reported; that is why it now has `for: 5m`. The dead-letter branch of `MonitorAbsent` and all of `MonitorNeverReported` were added after that run and have **not** fired against a live system. They are covered by promtool unit tests on synthetic series ([monitoring/alert-rules.test.yml](../monitoring/alert-rules.test.yml), run in CI), which prove the expressions and the `for:` timings. They do not prove that a real broken monitor produces those series.
 
 **Look:** is the service up (Aspire dashboard)? If it is, its log has `Saga monitor poll failed` or `Dead-letter monitor poll failed` with the SQL error. The usual cause is its database.
 

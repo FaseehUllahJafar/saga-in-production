@@ -1,0 +1,87 @@
+# promtool test rules monitoring/alert-rules.test.yml
+#
+# The monitor-absence rules are the ones a local run can't easily make fire: they
+# watch for a heartbeat that is missing, and a healthy run always has one. These tests
+# feed Prometheus synthetic series instead. They prove the expressions and the `for:`
+# timings, not that a real outage produces these series. The runbook says which
+# alerts have fired for real.
+rule_files:
+  - alert-rules.yml
+
+evaluation_interval: 1m
+
+tests:
+  # Every dead-letter monitor, everywhere, has never reported (a bad deploy of the
+  # monitor itself). The saga monitor is fine, so only the dead_letters branch fires.
+  - interval: 1m
+    input_series:
+      - series: 'saga_monitor_last_run_timestamp{job="orders", monitor="sagas"}'
+        values: '0+60x60'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: MonitorAbsent
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: MonitorAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              monitor: dead_letters
+            exp_annotations:
+              summary: "No dead_letters monitor anywhere has reported for 10 minutes"
+              runbook: "docs/runbook.md#monitorsilent"
+
+  # The only dead-letter monitor stops at minute 20. Absent once the 10-minute window
+  # holds no sample (minute 31), firing 5 minutes after that.
+  - interval: 1m
+    input_series:
+      - series: 'saga_monitor_last_run_timestamp{job="orders", monitor="sagas"}'
+        values: '0+60x60'
+      - series: 'saga_monitor_last_run_timestamp{job="orders", monitor="dead_letters"}'
+        values: '0+60x20'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: MonitorAbsent
+        exp_alerts: []
+      - eval_time: 34m
+        alertname: MonitorAbsent
+        exp_alerts: []
+      - eval_time: 37m
+        alertname: MonitorAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              monitor: dead_letters
+            exp_annotations:
+              summary: "No dead_letters monitor anywhere has reported for 10 minutes"
+              runbook: "docs/runbook.md#monitorsilent"
+
+  # Payments is up and exporting (target_info), but its dead-letter monitor has never
+  # reported. Orders' has. Only payments fires, and MonitorAbsent stays quiet because
+  # some dead-letter monitor is reporting.
+  - interval: 1m
+    input_series:
+      - series: 'target_info{job="orders"}'
+        values: '1x60'
+      - series: 'target_info{job="payments"}'
+        values: '1x60'
+      - series: 'saga_monitor_last_run_timestamp{job="orders", monitor="sagas"}'
+        values: '0+60x60'
+      - series: 'saga_monitor_last_run_timestamp{job="orders", monitor="dead_letters"}'
+        values: '0+60x60'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: MonitorNeverReported
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: MonitorNeverReported
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              job: payments
+            exp_annotations:
+              summary: "payments is up, but its dead-letter monitor has not reported for 10 minutes"
+              runbook: "docs/runbook.md#monitorsilent"
+      - eval_time: 6m
+        alertname: MonitorAbsent
+        exp_alerts: []
