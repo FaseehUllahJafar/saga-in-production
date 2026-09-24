@@ -1,6 +1,7 @@
 using Contracts;
 using FakePay.Data;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Orders.Saga;
 using Saga.IntegrationTests.Infrastructure;
 using Shipping.Data;
@@ -111,6 +112,34 @@ public class PivotAndCompensationTests(SagaCluster cluster) : IntegrationTest(cl
         (await HandledCount(Payments.PaymentsSetup.DatabaseName, "Contracts.CheckStepStatus", sagaId)).ShouldBe(1);
         (await ShipmentFor(sagaId))!.Status.ShouldBe(ShipmentStatus.Booked);
         (await AuthorizationsFor(sagaId)).ShouldHaveSingleItem().Status.ShouldBe(AuthorizationStatus.Authorized);
+    }
+
+    // Production failure: the runbook's "cancel" for a parked order voided the
+    // authorization by hand and left the booked shipment and the held stock in place.
+    // The operator's cancel runs the saga's own compensation instead, void first.
+    [Fact]
+    public async Task ParkedAtCapture_OperatorCancels_VoidsCancelsReleases()
+    {
+        var sku = await SeedSku(available: 5);
+        var sagaId = await PlaceOrder(sku, quantity: 2, cardToken: "tok_capture_down");
+        await WaitForSaga(sagaId, s => s.Status == SagaStatus.NeedsManualReview, TimeSpan.FromSeconds(60));
+
+        using (var scope = Cluster.Host(Service.Orders).Services.CreateScope())
+        {
+            var orders = scope.ServiceProvider;
+            (await SagaOperations.Cancel(sagaId, "ops@example.com", "no capture at FakePay",
+                    orders.GetRequiredService<Orders.Data.OrdersDbContext>(), orders.GetRequiredService<Wolverine.IMessageBus>()))
+                .ShouldBe(CancelResult.Sent);
+        }
+
+        // Not WaitForFinished: NeedsManualReview already counts as finished there.
+        await WaitForSaga(sagaId, s => s.Status is SagaStatus.Cancelled or SagaStatus.CompensationFailed, TimeSpan.FromSeconds(60));
+        var saga = await WaitForFinished(sagaId);
+        saga.Status.ShouldBe(SagaStatus.Cancelled, Describe(saga));
+        (await AuthorizationsFor(sagaId)).ShouldHaveSingleItem().Status.ShouldBe(AuthorizationStatus.Voided);
+        (await ShipmentFor(sagaId))!.Status.ShouldBe(ShipmentStatus.Cancelled);
+        (await StockOf(sku)).ShouldBe(5);
+        (await ReservationsFor(sagaId)).ShouldBe(0);
     }
 
     // Past the pivot with nobody answering: every capture response (and the inquiry) is

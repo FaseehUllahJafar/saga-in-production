@@ -16,3 +16,8 @@ public sealed record StartCheckout(
 // and must never fire while the saga is compensating that same step.
 public sealed record StepTimeout(Guid SagaId, string Step, int Attempt, Direction Direction, TimeSpan Delay)
     : TimeoutMessage(Delay), ISagaMessage;
+
+// An operator's decision on a parked saga (NeedsManualReview or CompensationFailed): undo
+// what is left. Sent by POST /admin/sagas/{id}/cancel after the person has checked the
+// provider; see SagaOperations.Cancel and docs/runbook.md#saganeedsattention.
+public sealed record CancelParkedSaga(Guid SagaId, string ResolvedBy, string Note) : ISagaMessage;

@@ -12,6 +12,7 @@ namespace Orders.Api;
 
 public sealed record PlaceOrderRequest(string CustomerEmail, string CardToken, string ShippingAddress, List<PlaceOrderLine> Lines);
 public sealed record PlaceOrderLine(string Sku, int Quantity, decimal UnitPrice);
+public sealed record CancelParkedSagaRequest(string ResolvedBy, string Note);
 
 public static class OrdersApi
 {
@@ -82,6 +83,23 @@ public static class OrdersApi
                 NudgeResult.NotInFlight => Results.Conflict(new { error = "only an InProgress or Compensating saga can be nudged" }),
                 _ => Results.NotFound()
             });
+
+        // Operator endpoint for the SagaNeedsAttention runbook: undo a parked saga once a
+        // person has checked the provider. Same caveat as the nudge about auth.
+        app.MapPost("/admin/sagas/{id:guid}/cancel", async (Guid id, CancelParkedSagaRequest request, OrdersDbContext db, IMessageBus bus) =>
+        {
+            var errors = new Dictionary<string, string[]>();
+            if (string.IsNullOrWhiteSpace(request.ResolvedBy)) errors["resolvedBy"] = ["who decided"];
+            if (string.IsNullOrWhiteSpace(request.Note)) errors["note"] = ["what the provider said"];
+            if (errors.Count > 0) return Results.ValidationProblem(errors);
+
+            return await SagaOperations.Cancel(id, request.ResolvedBy, request.Note, db, bus) switch
+            {
+                CancelResult.Sent => Results.Accepted($"/orders/{id}"),
+                CancelResult.NotParked => Results.Conflict(new { error = "only a NeedsManualReview or CompensationFailed saga can be cancelled" }),
+                _ => Results.NotFound()
+            };
+        });
     }
 
     private static Guid OrderIdFor(string idempotencyKey)

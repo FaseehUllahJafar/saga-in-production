@@ -223,6 +223,46 @@ public sealed class CheckoutSaga : Wolverine.Saga
         ];
     }
 
+    // ---- operator resolution -----------------------------------------------------
+
+    // A parked saga has stopped because going on alone was unsafe. Once a person has
+    // looked at the provider and decided "cancel", the undo is the saga's own
+    // compensation, not a set of hand-made calls to each participant: the same
+    // compensation CommandIds, so each participant dedupes against anything already
+    // undone, and the same timeouts, so an undo that goes unanswered parks the saga again.
+    //
+    // NeedsManualReview: the operator has confirmed there is no capture. The VOID goes
+    // first, out of LIFO order, because a capture still queued somewhere is the one thing
+    // that could make this wrong. Once the authorization is voided, such a capture fails
+    // at Payments ("no live authorization") or at the provider. And if the capture did land after
+    // all, the void is refused, the saga parks as CompensationFailed at authorize-payment,
+    // and the shipment and the stock have not been touched.
+    //
+    // CompensationFailed: whatever blocked the undo has been fixed. Resume at the step
+    // that ran out, with a fresh retry budget.
+    public OutgoingMessages Handle(CancelParkedSaga command, SagaRuntime rt)
+    {
+        if (Status is not (SagaStatus.NeedsManualReview or SagaStatus.CompensationFailed))
+        {
+            rt.Logger.LogWarning("Saga {SagaId}: operator cancel ignored, status is {Status}", Id, Status);
+            return [];
+        }
+
+        rt.Logger.LogWarning("Saga {SagaId}: {Status} at {Step}, cancelled by {ResolvedBy}: {Note}",
+            Id, Status, CurrentStep, command.ResolvedBy, command.Note);
+        FailureReason = $"{FailureReason} | cancelled by {command.ResolvedBy}: {command.Note}";
+
+        var resumeAt = CurrentStep;
+        if (Status == SagaStatus.NeedsManualReview)
+        {
+            Journal.Record(StepNames.CapturePayment, StepOutcome.Rejected, rt.Clock.GetUtcNow(), "operator: no capture at the provider");
+            resumeAt = StepNames.AuthorizePayment;
+        }
+
+        Status = SagaStatus.Compensating;
+        return SendCompensation(resumeAt, attempt: 1, rt);
+    }
+
     // ---- replies for a saga that doesn't exist ----------------------------------
     // Wolverine calls these instead of throwing when no saga row matches the SagaId (a
     // reply to a command someone replayed by hand, a saga purged after retention).

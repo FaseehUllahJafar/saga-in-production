@@ -333,6 +333,80 @@ public class CheckoutSagaTests
         _h.Saga.LastUpdatedUtc.ShouldBe(before);
     }
 
+    // Production failure: a saga parked past the pivot, and the operator's only lever was
+    // SQL plus hand-made calls to each participant. The booked shipment and the held
+    // stock were left behind.
+    [Fact]
+    public void OperatorCancel_ParkedAtCapture_VoidsFirst_ThenUndoesTheRest()
+    {
+        ParkAtCapture();
+
+        _h.Saga.Handle(new CancelParkedSaga(_h.Saga.Id, "ops@example.com", "no capture at FakePay"), _h.Runtime)
+            .Single<VoidPayment>().CommandId.ShouldBe(_h.Comp(StepNames.AuthorizePayment));
+        _h.Saga.Status.ShouldBe(SagaStatus.Compensating);
+
+        _h.Saga.Handle(new PaymentVoided(_h.Saga.Id, _h.Comp(StepNames.AuthorizePayment), WasNoOp: false), _h.Runtime)
+            .Single<CancelShipment>();
+        _h.Saga.Handle(new ShipmentCancelled(_h.Saga.Id, _h.Comp(StepNames.BookShipment), WasNoOp: false), _h.Runtime)
+            .Single<ReleaseStock>();
+        var done = _h.Saga.Handle(new StockReleased(_h.Saga.Id, _h.Comp(StepNames.ReserveStock), WasNoOp: false), _h.Runtime);
+
+        done.Single<OrderCancelled>();
+        _h.Saga.Status.ShouldBe(SagaStatus.Cancelled);
+        _h.Saga.FailureReason.ShouldNotBeNull().ShouldEndWith("cancelled by ops@example.com: no capture at FakePay");
+        _h.Saga.Journal.Select(j => (j.Step, j.Outcome)).ShouldBe(
+        [
+            (StepNames.AuthorizePayment, StepOutcome.Compensated),
+            (StepNames.ReserveStock, StepOutcome.Compensated),
+            (StepNames.BookShipment, StepOutcome.Compensated),
+            (StepNames.CapturePayment, StepOutcome.Rejected),
+        ]);
+    }
+
+    [Fact]
+    public void OperatorCancel_AfterCompensationFailed_ResumesAtThatStep_WithAFreshBudget()
+    {
+        _h.AdvanceTo(StepNames.ReserveStock);
+        _h.Saga.Handle(new InsufficientStock(_h.Saga.Id, _h.Fwd(StepNames.ReserveStock), "BOOK-DDD"), _h.Runtime);
+        for (var attempt = 1; attempt <= _h.Timings.CompensationAttemptTimeouts.Length; attempt++)
+        {
+            _h.Saga.Handle(_h.Timeout(StepNames.AuthorizePayment, attempt, Direction.Compensate), _h.Runtime);
+        }
+        _h.Saga.Status.ShouldBe(SagaStatus.CompensationFailed);
+
+        var resumed = _h.Saga.Handle(new CancelParkedSaga(_h.Saga.Id, "ops@example.com", "payments back up"), _h.Runtime);
+
+        resumed.Single<VoidPayment>().CommandId.ShouldBe(_h.Comp(StepNames.AuthorizePayment));
+        resumed.Single<StepTimeout>().ShouldBe(new StepTimeout(_h.Saga.Id, StepNames.AuthorizePayment, 1, Direction.Compensate, TimeSpan.FromSeconds(30)));
+        _h.Saga.Handle(new PaymentVoided(_h.Saga.Id, _h.Comp(StepNames.AuthorizePayment), WasNoOp: false), _h.Runtime)
+            .Single<OrderCancelled>();
+        _h.Saga.Status.ShouldBe(SagaStatus.Cancelled);
+    }
+
+    // The endpoint checks the status too, but the saga must not trust that read: the
+    // saga may have moved between the check and the message arriving.
+    [Fact]
+    public void OperatorCancel_OnASagaThatIsNotParked_Ignored()
+    {
+        _h.AdvanceTo(StepNames.BookShipment);
+
+        _h.Saga.Handle(new CancelParkedSaga(_h.Saga.Id, "ops@example.com", "oops"), _h.Runtime).ShouldBeEmpty();
+
+        _h.Saga.Status.ShouldBe(SagaStatus.InProgress);
+        _h.Saga.CurrentStep.ShouldBe(StepNames.BookShipment);
+    }
+
+    private void ParkAtCapture()
+    {
+        _h.AdvanceTo(StepNames.CapturePayment);
+        for (var attempt = 1; attempt <= _h.Timings.ForwardAttemptTimeouts.Length; attempt++)
+        {
+            _h.Saga.Handle(_h.Timeout(StepNames.CapturePayment, attempt), _h.Runtime);
+        }
+        _h.Saga.Handle(new StepStatusReported(_h.Saga.Id, _h.Fwd(StepNames.CapturePayment), StepNames.CapturePayment, InquiryResult.NotFound, null), _h.Runtime);
+        _h.Saga.Status.ShouldBe(SagaStatus.NeedsManualReview);
+    }
+
     private void ExhaustAuthorizeRetries()
     {
         _h.Start();

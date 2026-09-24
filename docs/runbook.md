@@ -86,18 +86,26 @@ On the first run, the capture lookup returned `404 no_such_request` and the auth
 
 For `CompensationFailed`, finish the undo the saga could not: the journal shows which step, and that step's participant table shows its state.
 
-**Record** the decision on the saga, which clears the alert:
-```sql
--- orders-db (sqlcmd -I)
-UPDATE orders.CheckoutSagas
-SET Status = 'Cancelled',            -- or 'Completed'
-    FailureReason = CONCAT(FailureReason, ' | resolved by <who> <when>: <what was done>'),
-    LastUpdatedUtc = SYSDATETIMEOFFSET()
-WHERE Id = '<saga id>' AND Status IN ('NeedsManualReview', 'CompensationFailed');
-```
-This records what a person did. It does not do it: no messages are sent, so no events go out and no notification either. That is on purpose. Anything that moves money or stock is done at its source first, and this row is updated afterwards.
+**Act** on the decision.
 
-**First run, resolved** as "cancel": the authorization was voided at FakePay (`POST /v1/authorizations/<id>/void`) and the decision recorded with the `UPDATE` above. The alert cleared on the next poll after Orders came back. The demo has no operator API for Shipping or Inventory, so the booked shipment and the held unit were left in place. A real system needs those levers before it needs this runbook.
+- **Cancel:** let the saga undo itself.
+  ```
+  POST /admin/sagas/<saga id>/cancel
+  { "resolvedBy": "<who>", "note": "<what the provider said>" }
+  ```
+  The saga re-runs its own compensation, under the same CommandIds it would have used, so each participant dedupes against anything already undone. For `NeedsManualReview` the **void goes first**, before the shipment and the stock. A capture still queued somewhere is then refused (`no live authorization`). If a capture did land after all, the void is refused and the saga parks again as `CompensationFailed` at `authorize-payment`, with the shipment and the stock untouched. For `CompensationFailed` it resumes at the step that ran out, with a fresh retry budget, so fix whatever blocked the undo first. The response is 409 for a saga that isn't parked. The alert clears once the saga reaches `Cancelled`. Tested by `ParkedAtCapture_OperatorCancels_VoidsCancelsReleases`.
+- **Completed** (the capture exists, including a cancel whose void was refused): there is no lever for this yet. Record it on the row, which also clears the alert:
+  ```sql
+  -- orders-db (sqlcmd -I)
+  UPDATE orders.CheckoutSagas
+  SET Status = 'Completed',
+      FailureReason = CONCAT(FailureReason, ' | resolved by <who> <when>: capture <capture id> found at the provider'),
+      LastUpdatedUtc = SYSDATETIMEOFFSET()
+  WHERE Id = '<saga id>' AND Status IN ('NeedsManualReview', 'CompensationFailed');
+  ```
+  This records what the provider already did. It sends nothing, so no `OrderCompleted` goes out and the customer gets no email. Send it by hand.
+
+**First run, resolved** as "cancel", before the cancel lever existed: the authorization was voided at FakePay by hand and the decision was recorded in SQL. The booked shipment and the held unit were left in place, because the demo had no way to undo them. That is why `POST /admin/sagas/<id>/cancel` exists.
 
 **Escalate** at once if the provider says "captured" and the shipment was cancelled: a paid order was cancelled. **Owner:** payments operations, with the Orders team.
 
