@@ -55,7 +55,8 @@ public sealed class FakePayDbContext(DbContextOptions<FakePayDbContext> options)
             b.Property(x => x.CaptureId).HasMaxLength(64);
             b.Property(x => x.Amount).HasPrecision(18, 2);
             b.Property(x => x.Currency).HasMaxLength(3).IsFixedLength().HasDefaultValue("USD");
-            b.Property(x => x.Status).HasConversion<string>().HasMaxLength(16);
+            // Every UPDATE checks the status it read. See FakePayApi.OnFreshRow.
+            b.Property(x => x.Status).HasConversion<string>().HasMaxLength(16).IsConcurrencyToken();
         });
 
         modelBuilder.Entity<IdempotencyRecord>(b =>

@@ -15,7 +15,7 @@ There are three layers. Each one answers a different question.
 - **Isolation by id.** Each test seeds its own SKUs and uses its own SagaIds. Envelope and dead-letter queries filter by the saga id inside the message body.
 - **Quiet between tests.** Before each test, and after each saga finishes, the harness waits until no service has incoming, outgoing or due-soon scheduled envelopes and every RabbitMQ queue is empty.
 - **Deterministic races.** Timing-dependent scenarios are forced, not hoped for:
-  - FakePay's `tok_slow` and `tok_slow_commit` hold a request after or before its commit.
+  - FakePay's `tok_slow` and `tok_slow_commit` hold an authorize after or before its commit, and `tok_slow_capture` holds a capture between its read and its write.
   - Toxiproxy drops responses while letting requests through.
   - A test-only EF interceptor holds a saga commit open, so a reply and a timeout really collide. The test asserts that the conflict happened.
 
@@ -40,6 +40,7 @@ There are three layers. Each one answers a different question.
 | `CaptureTerminalFailure_CancelsReleasesVoids` | The authorization expired before capture. |
 | `CaptureOutcomeUnknown_StopsForManualReview_ShipmentKept` | Silence past the pivot: the capture landed, but no answer came back. |
 | `CaptureInquiryFindsNothing_StopsForManualReview_AuthorizationKept` | The inquiry past the pivot says "no trace". That is still not safe to act on backwards. |
+| `VoidLandsWhileCaptureIsInFlight_CaptureIsRefused_MoneyNotTaken` | An operator voids a parked order while a capture is still inside the provider. Exactly one of them may win. |
 | `CompensationExhausted_EndsCompensationFailed` | Payments is down for longer than the compensation budget. |
 | `InsufficientStock_VoidsAuthorization_NothingDeadLettered` | A business rejection is a reply, not an exception. |
 | `InquiryReachesInventory_AndNoStockIsLeakedEitherWay` | The inquiry reaches a non-payment participant. It can overtake a queued reserve, and either ending must leave stock exact. |
@@ -68,3 +69,4 @@ The suite went through a review council before and after it was written: Opus 5.
 - **A NotFound inquiry at capture compensated a possibly-paid order.** Found by three council members independently.
 - **Leaked authorizations and bookings.** They leaked when cleanup of a late effect failed.
 - **Handler discovery broke with several hosts in one process.**
+- **A void and a capture could both succeed.** FakePay read the authorization, checked it, and wrote it, with nothing stopping a concurrent write in between. A void could answer 200 and the capture land anyway, which breaks the operator's "void first" cancel of a parked saga. The final review before release found it; the status is now a concurrency token.

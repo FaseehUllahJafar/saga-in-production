@@ -29,11 +29,14 @@ public sealed record ErrorResponse(string Error);
 //   tok_slow           authorize commits, then answers late (past the caller's timeout)
 //   tok_slow_commit    authorize waits BEFORE committing, so a void can overtake it
 //   tok_capture_down   every capture answers 503 and records nothing
+//   tok_slow_capture   first capture holds between reading the authorization and
+//                      writing it, so a void can land in between
 public static class FakePayApi
 {
     private static readonly TimeSpan KeyLifetime = TimeSpan.FromHours(24);
     private static readonly TimeSpan AuthorizationLifetime = TimeSpan.FromDays(7);
     private static readonly HashSet<string> SupportedCurrencies = ["USD", "EUR", "GBP"];
+    private const int SlowCaptureOnce = -2;
 
     // The idempotency hash must not change for a request that means the same thing.
     // Adding Currency changed the request's serialized form, so a retry sent after the
@@ -93,6 +96,7 @@ public static class FakePayApi
                     {
                         "tok_flaky_capture" => -1,
                         "tok_capture_down" => int.MinValue,
+                        "tok_slow_capture" => SlowCaptureOnce,
                         _ => 0
                     },
                 };
@@ -110,50 +114,62 @@ public static class FakePayApi
             return result;
         });
 
-        app.MapPost("/v1/authorizations/{id}/capture", async (string id, CaptureRequest request, HttpContext http, FakePayDbContext db, TimeProvider clock) =>
+        app.MapPost("/v1/authorizations/{id}/capture", async (string id, CaptureRequest request, HttpContext http, FakePayDbContext db, TimeProvider clock, FakePayOptions options) =>
         {
             if (!TryGetKey(http, out var key)) return MissingKey();
 
-            var authorization = await db.Authorizations.FindAsync(id);
-            if (authorization is null) return Results.NotFound(new ErrorResponse("no_such_authorization"));
-
-            if (authorization.CaptureAttempts == int.MinValue)
+            return await OnFreshRow(db, async () =>
             {
-                return Results.Json(new ErrorResponse("processor_unavailable"), statusCode: 503);
-            }
+                var authorization = await db.Authorizations.FindAsync(id);
+                if (authorization is null) return Results.NotFound(new ErrorResponse("no_such_authorization"));
 
-            if (authorization.CaptureAttempts < 0)
-            {
-                authorization.CaptureAttempts = 0;
-                await db.SaveChangesAsync();
-                return Results.Json(new ErrorResponse("processor_unavailable"), statusCode: 503);
-            }
-
-            return await Idempotent(db, clock, key, "capture", request, () =>
-            {
-                (int, object, string?) outcome = authorization switch
+                if (authorization.CaptureAttempts == int.MinValue)
                 {
-                    { Status: AuthorizationStatus.Voided } => (409, new ErrorResponse("authorization_voided"), id),
-                    { Status: AuthorizationStatus.Captured } => (409, new ErrorResponse("already_captured"), id),
-                    _ when authorization.ExpiresUtc <= clock.GetUtcNow() => (409, new ErrorResponse("authorization_expired"), id),
-                    _ when request.AmountMinor / 100m > authorization.Amount => (422, new ErrorResponse("amount_exceeds_authorization"), id),
-                    _ => Capture(authorization),
-                };
-                return Task.FromResult(outcome);
+                    return Results.Json(new ErrorResponse("processor_unavailable"), statusCode: 503);
+                }
+
+                if (authorization.CaptureAttempts == SlowCaptureOnce)
+                {
+                    // Committed before the wait, so a test can see the capture has read
+                    // the row and send its void into the gap.
+                    authorization.CaptureAttempts = 0;
+                    await db.SaveChangesAsync();
+                    await Task.Delay(options.SlowResponseDelay);
+                }
+                else if (authorization.CaptureAttempts < 0)
+                {
+                    authorization.CaptureAttempts = 0;
+                    await db.SaveChangesAsync();
+                    return Results.Json(new ErrorResponse("processor_unavailable"), statusCode: 503);
+                }
+
+                return await Idempotent(db, clock, key, "capture", request, () =>
+                {
+                    (int, object, string?) outcome = authorization switch
+                    {
+                        { Status: AuthorizationStatus.Voided } => (409, new ErrorResponse("authorization_voided"), id),
+                        { Status: AuthorizationStatus.Captured } => (409, new ErrorResponse("already_captured"), id),
+                        _ when authorization.ExpiresUtc <= clock.GetUtcNow() => (409, new ErrorResponse("authorization_expired"), id),
+                        _ when request.AmountMinor / 100m > authorization.Amount => (422, new ErrorResponse("amount_exceeds_authorization"), id),
+                        _ => Capture(authorization),
+                    };
+                    return Task.FromResult(outcome);
+                });
             });
         });
 
         // Naturally idempotent: voiding a voided authorization is a 200.
         app.MapPost("/v1/authorizations/{id}/void", async (string id, FakePayDbContext db) =>
-        {
-            var authorization = await db.Authorizations.FindAsync(id);
-            if (authorization is null) return Results.NotFound(new ErrorResponse("no_such_authorization"));
-            if (authorization.Status == AuthorizationStatus.Captured) return Results.Conflict(new ErrorResponse("already_captured"));
+            await OnFreshRow(db, async () =>
+            {
+                var authorization = await db.Authorizations.FindAsync(id);
+                if (authorization is null) return Results.NotFound(new ErrorResponse("no_such_authorization"));
+                if (authorization.Status == AuthorizationStatus.Captured) return Results.Conflict(new ErrorResponse("already_captured"));
 
-            authorization.Status = AuthorizationStatus.Voided;
-            await db.SaveChangesAsync();
-            return Results.Ok(ToResponse(authorization));
-        });
+                authorization.Status = AuthorizationStatus.Voided;
+                await db.SaveChangesAsync();
+                return Results.Ok(ToResponse(authorization));
+            }));
 
         // The inquiry endpoint: "what happened to the request I sent with this key?"
         app.MapGet("/v1/lookup/{operation}/{key}", async (string operation, string key, FakePayDbContext db) =>
@@ -180,6 +196,30 @@ public static class FakePayApi
                 ? Results.Ok(ToResponse(authorization))
                 : Results.Json(JsonDocument.Parse(record.ResponseJson).RootElement, statusCode: record.StatusCode);
         });
+    }
+
+    // A void and a capture both read the authorization, decide, and write. Without a
+    // guard, the two could interleave and BOTH succeed: the void answers 200 and the
+    // capture lands anyway, or the void overwrites a capture that already took the money.
+    // Either way Payments records a void for a paid order, and the saga cancels it. The
+    // operator's "void first" cancel of a parked saga depends on exactly one of them
+    // winning. Status is a concurrency token (see FakePayDbContext), so a write whose read
+    // has gone stale fails instead of overwriting, and the loser runs again against the
+    // row as it is now: a capture then finds the void, and a void finds the capture.
+    // A review found this before release; ProviderRaceTests pins it.
+    private static async Task<IResult> OnFreshRow(FakePayDbContext db, Func<Task<IResult>> attempt)
+    {
+        for (var tries = 1; ; tries++)
+        {
+            try
+            {
+                return await attempt();
+            }
+            catch (DbUpdateConcurrencyException) when (tries < 3)
+            {
+                db.ChangeTracker.Clear();
+            }
+        }
     }
 
     private static (int, object, string?) Capture(Authorization authorization)
