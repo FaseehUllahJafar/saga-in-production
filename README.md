@@ -2,6 +2,8 @@
 
 A checkout saga in .NET 10, built for the failures that tutorials skip: a payment response lost after the charge went through, a timeout that doesn't tell you whether the step happened, a compensation that overtakes its own command, a node killed mid-saga, a saga that stops moving without an error.
 
+![An order fails at capture and is undone in reverse; the dashboard then follows that one saga id across every service and into FakePay](docs/demo.gif)
+
 Authorize payment → reserve stock → book shipment → capture payment. An orchestrator in Orders runs the steps. Wolverine handles the messaging over RabbitMQ, and each of the six services has its own SQL Server database. FakePay stands in for a card processor. Every failure named above has an integration test that runs against real containers and asserts on what ends up in each database.
 
 This is the companion repo to my LinkedIn series on sagas. The posts simplify, and the repo doesn't. [Where they differ](#where-this-differs-from-the-posts) is listed below.
@@ -30,7 +32,7 @@ To see the failures, change one field, and the `Idempotency-Key` too: a repeat o
 - `"shippingAddress": "UNDELIVERABLE"`: the carrier refuses the booking and everything before it is undone.
 - `"cardToken": "tok_capture_down"`: every capture fails and leaves no trace. After its retries and an inquiry (about 8 minutes), the saga stops and waits for a human rather than guess whether the money moved.
 
-The other tokens are listed at the top of [FakePayApi.cs](src/FakePay/FakePayApi.cs). `aspire run -- --monitoring` adds Prometheus, Alertmanager and Grafana.
+Or run `pwsh scripts/demo.ps1` (`-CardToken` picks the scenario; the default is `tok_expired_auth`). It places the order and prints each step as it happens, as in the GIF above. The other tokens are listed at the top of [FakePayApi.cs](src/FakePay/FakePayApi.cs). `aspire run -- --monitoring` adds Prometheus, Alertmanager and Grafana.
 
 Tests: `dotnet test` runs 30 unit tests, 44 integration tests (Testcontainers: SQL Server, RabbitMQ, Toxiproxy) and one end-to-end test through the real AppHost.
 
